@@ -26,19 +26,5 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const upstream = await fetch(downloadUrl);
-  if (!upstream.ok) {
-    return NextResponse.json(
-      { error: `Failed to fetch agent asset: ${upstream.status} ${upstream.statusText}` },
-      { status: 502 }
-    );
-  }
-
-  const headers = new Headers(upstream.headers);
-  headers.set('Content-Disposition', `attachment; filename=${fileNames[platform]}`);
-
-  return new NextResponse(upstream.body, {
-    status: upstream.status,
-    headers,
-  });
+  return NextResponse.redirect(downloadUrl);
 }

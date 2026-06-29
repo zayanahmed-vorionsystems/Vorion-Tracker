@@ -4,13 +4,17 @@ import { useState } from 'react';
 import { useAuthStore } from '@/store/auth';
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://your-app.vercel.app';
-const defaultAgentDownloadUrl = (platform: string) => `/api/agent/download?platform=${platform}`;
+const agentDownloadUrls = {
+  win: process.env.NEXT_PUBLIC_AGENT_WIN_URL,
+  mac: process.env.NEXT_PUBLIC_AGENT_MAC_URL,
+  linux: process.env.NEXT_PUBLIC_AGENT_LINUX_URL,
+};
 
 const platforms = [
   {
     id: 'windows', icon: '🪟', name: 'Windows',
     sub: 'Windows 10 / 11 · 64-bit', badge: '.exe installer', badgeColor: '#60A5FA',
-    url: process.env.NEXT_PUBLIC_AGENT_WIN_URL || defaultAgentDownloadUrl('win'),
+    url: agentDownloadUrls.win,
     steps: [
       'Download the installer below',
       'Run VorionTracker-Agent-Setup.exe',
@@ -19,12 +23,14 @@ const platforms = [
       'The agent starts automatically and sits in your system tray (bottom-right taskbar)',
       'It will auto-start every time Windows boots',
     ],
-    script: `# PowerShell one-liner — paste in PowerShell as Administrator:\n$url = "${APP_URL}/api/agent/download?platform=win"\n$out = "$env:TEMP\\VorionTracker-Setup.exe"\nInvoke-WebRequest -Uri $url -OutFile $out\nStart-Process $out`,
+    script: agentDownloadUrls.win
+      ? `# PowerShell one-liner — paste in PowerShell as Administrator:\n$url = "${agentDownloadUrls.win}"\n$out = "$env:TEMP\\VorionTracker-Setup.exe"\nInvoke-WebRequest -Uri $url -OutFile $out\nStart-Process $out`
+      : '# Agent download URL is not configured. Please set NEXT_PUBLIC_AGENT_WIN_URL.',
   },
   {
     id: 'mac', icon: '🍎', name: 'macOS',
     sub: 'macOS 12 Monterey and later · Intel & Apple Silicon', badge: '.dmg installer', badgeColor: '#A78BFA',
-    url: process.env.NEXT_PUBLIC_AGENT_MAC_URL || defaultAgentDownloadUrl('mac'),
+    url: agentDownloadUrls.mac,
     steps: [
       'Download the .dmg file below',
       'Open it and drag Vorion Tracker Agent to your Applications folder',
@@ -34,12 +40,14 @@ const platforms = [
       'The agent icon appears in your menu bar (top-right)',
       'Go to System Settings → General → Login Items → add Vorion Tracker Agent to auto-start',
     ],
-    script: `# Terminal one-liner:\ncurl -L "${APP_URL}/api/agent/download?platform=mac" -o /tmp/VorionTracker-Agent.dmg\nopen /tmp/VorionTracker-Agent.dmg`,
+    script: agentDownloadUrls.mac
+      ? `# Terminal one-liner:\ncurl -L "${agentDownloadUrls.mac}" -o /tmp/VorionTracker-Agent.dmg\nopen /tmp/VorionTracker-Agent.dmg`
+      : '# Agent download URL is not configured. Please set NEXT_PUBLIC_AGENT_MAC_URL.',
   },
   {
     id: 'linux', icon: '🐧', name: 'Linux',
     sub: 'Ubuntu 20.04+ · Debian · Fedora', badge: '.tar.gz', badgeColor: '#34D399',
-    url: process.env.NEXT_PUBLIC_AGENT_LINUX_URL || defaultAgentDownloadUrl('linux'),
+    url: agentDownloadUrls.linux,
     steps: [
       'Run the one-liner install script below in your terminal',
       'The agent installs to /opt/vorion-tracker-agent/',
@@ -47,7 +55,9 @@ const platforms = [
       'A system tray icon will appear',
       'Auto-start is configured via a systemd user service',
     ],
-    script: `# Terminal one-liner:\ncurl -fsSL ${APP_URL}/api/agent/install.sh | bash`,
+    script: agentDownloadUrls.linux
+      ? `# Terminal one-liner:\ncurl -L "${agentDownloadUrls.linux}" -o /tmp/VorionTracker-Agent.tar.gz\n# Extract and install the agent manually using tar commands or your distro package workflow.`
+      : '# Agent download URL is not configured. Please set NEXT_PUBLIC_AGENT_LINUX_URL.',
   },
 ];
 
@@ -79,24 +89,7 @@ export default function DownloadPage() {
         </p>
       </div>
 
-      {/* Server URL notice */}
-      <div style={{
-        ...card, padding: '14px 18px', marginBottom: 24, display: 'flex', gap: 14, alignItems: 'flex-start',
-        borderColor: 'rgba(34,197,94,.2)', background: 'rgba(34,197,94,.05)',
-      }}>
-        <span style={{ fontSize: 18 }}>✅</span>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#4ADE80', marginBottom: 5 }}>
-            Agent will connect to your Vercel deployment
-          </div>
-          <code style={{ fontSize: 12, background: 'rgba(34,197,94,.1)', padding: '2px 8px', borderRadius: 6, color: '#86EFAC' }}>
-            {APP_URL}
-          </code>
-          <div style={{ fontSize: 11, color: 'rgba(74,222,128,.6)', marginTop: 6 }}>
-            Agents are pre-configured with this URL — employees just sign in with their company email.
-          </div>
-        </div>
-      </div>
+      
 
       {/* Platform cards */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -119,15 +112,27 @@ export default function DownloadPage() {
                 </div>
                 <div style={{ fontSize: 12, color: 'rgba(248,250,252,.4)', marginTop: 2 }}>{p.sub}</div>
               </div>
-              <a href={p.url} download style={{
-                padding: '9px 20px', borderRadius: 12,
-                background: 'linear-gradient(180deg, rgba(0,80,176,.55), rgba(0,80,176,.35))',
-                border: '1px solid rgba(0,80,176,.55)',
-                color: '#F8FAFC', fontSize: 13, fontWeight: 600, textDecoration: 'none',
-                display: 'inline-block', whiteSpace: 'nowrap',
-              }}>
-                ⬇ Download
-              </a>
+              {p.url ? (
+                <a href={p.url} target="_blank" rel="noopener noreferrer" style={{
+                  padding: '9px 20px', borderRadius: 12,
+                  background: 'linear-gradient(180deg, rgba(0,80,176,.55), rgba(0,80,176,.35))',
+                  border: '1px solid rgba(0,80,176,.55)',
+                  color: '#F8FAFC', fontSize: 13, fontWeight: 600, textDecoration: 'none',
+                  display: 'inline-block', whiteSpace: 'nowrap',
+                }}>
+                  ⬇ Download
+                </a>
+              ) : (
+                <span style={{
+                  padding: '9px 20px', borderRadius: 12,
+                  background: 'rgba(248,250,252,.08)',
+                  border: '1px solid rgba(248,250,252,.12)',
+                  color: 'rgba(248,250,252,.45)', fontSize: 13, fontWeight: 600,
+                  display: 'inline-block', whiteSpace: 'nowrap',
+                }}>
+                  Download unavailable
+                </span>
+              )}
             </div>
 
             {/* Steps + Script */}
@@ -174,19 +179,6 @@ export default function DownloadPage() {
         ))}
       </div>
 
-      {/* Bulk deploy notice */}
-      <div style={{
-        ...card, padding: '14px 18px', marginTop: 18,
-        borderColor: 'rgba(248,208,0,.2)', background: 'rgba(248,208,0,.04)',
-      }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color: '#F8D000', marginBottom: 6 }}>💡 Deploying to many computers at once?</div>
-        <p style={{ fontSize: 12, color: 'rgba(248,250,252,.5)', margin: 0, lineHeight: 1.7 }}>
-          <strong style={{ color: 'rgba(248,250,252,.7)' }}>Windows:</strong> Use Group Policy (GPO) to push the .exe silently with <code style={{ background: 'rgba(248,208,0,.1)', padding: '1px 5px', borderRadius: 4, color: '#F8D000' }}>VorionTracker-Setup.exe /S</code><br/>
-          <strong style={{ color: 'rgba(248,250,252,.7)' }}>Mac:</strong> Use Jamf, Mosyle, or Kandji MDM to deploy the .pkg version<br/>
-          <strong style={{ color: 'rgba(248,250,252,.7)' }}>Linux:</strong> Use Ansible, Chef, or Puppet to run the install script across all machines<br/>
-          <strong style={{ color: 'rgba(248,250,252,.7)' }}>All platforms:</strong> The agent uses the API key embedded at build time — no extra configuration needed by employees
-        </p>
-      </div>
     </div>
   );
 }

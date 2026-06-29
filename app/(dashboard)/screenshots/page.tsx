@@ -11,6 +11,7 @@ export default function ScreenshotsPage() {
   const [userId,  setUserId]  = useState('');
   const [preview, setPreview] = useState<string|null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>('');
 
   useEffect(() => {
     fetch('/api/users',{headers:{Authorization:`Bearer ${token}`}})
@@ -18,12 +19,37 @@ export default function ScreenshotsPage() {
   },[token]);
 
   useEffect(()=>{
-    setLoading(true);
-    const p=new URLSearchParams({date,limit:'80'});
-    if(userId) p.set('userId',userId);
-    fetch(`/api/screenshots?${p}`,{headers:{Authorization:`Bearer ${token}`}})
-      .then(r=>r.json()).then(d=>{setShots(d);setLoading(false);});
-  },[date,userId,token]);
+    const loadScreenshots = async () => {
+      setLoading(true);
+      setError('');
+      if (!token) {
+        setError('Not authenticated. Please sign in.');
+        setShots([]);
+        setLoading(false);
+        return;
+      }
+      const p = new URLSearchParams({ date, limit: '80' });
+      if (userId) p.set('userId', userId);
+      try {
+        const r = await fetch(`/api/screenshots?${p.toString()}`, { headers: { Authorization: `Bearer ${token}` } });
+        const text = await r.text();
+        if (!r.ok) {
+          console.error('/api/screenshots failed', r.status, text);
+          setError(text || 'Failed to load screenshots');
+          setShots([]);
+          return;
+        }
+        setShots(JSON.parse(text || '[]'));
+      } catch (err) {
+        console.error('Failed to load screenshots', err);
+        setError('Failed to load screenshots');
+        setShots([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadScreenshots();
+  }, [date, userId, token]);
 
   return (
     <div>
@@ -38,7 +64,9 @@ export default function ScreenshotsPage() {
           style={{ padding:'7px 10px',borderRadius:8,border:'0.5px solid #e2e8f0',fontSize:13,background:'#fff' }}/>
       </div>
 
-      {loading ? <div style={{ textAlign:'center',padding:60,color:'#94a3b8',fontSize:13 }}>Loading…</div> : (
+      {loading ? <div style={{ textAlign:'center',padding:60,color:'#94a3b8',fontSize:13 }}>Loading…</div> : error ? (
+        <div style={{ textAlign:'center',padding:60,color:'#F87171',fontSize:13 }}>{error}</div>
+      ) : (
         <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(190px,1fr))',gap:10 }}>
           {shots.map(s=>(
             <div key={s.id} onClick={()=>setPreview(s.file_url)}

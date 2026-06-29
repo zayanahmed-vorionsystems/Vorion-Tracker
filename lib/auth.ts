@@ -26,11 +26,11 @@ export function getTokenFromRequest(req: NextRequest): TokenPayload | null {
 
 // ── Role levels ────────────────────────────────────────────────────────────
 const LEVELS: Record<Role, number> = {
-  super_admin: 5, executive: 4, qa_manager: 3, team_lead: 2, employee: 1,
+  super_admin: 5, admin: 5, executive: 4, qa_manager: 3, team_lead: 2, employee: 1,
 };
 
 export const roleLevel    = (r: Role) => LEVELS[r] ?? 0;
-export const canMonitorAll = (r: Role) => ['super_admin','qa_manager'].includes(r);
-export const canManageUsers= (r: Role) => r === 'super_admin';
-export const canSendAlerts = (r: Role) => ['super_admin','qa_manager','team_lead'].includes(r);
+export const canMonitorAll = (r: Role) => ['super_admin','qa_manager','admin'].includes(r);
+export const canManageUsers= (r: Role) => ['super_admin','admin'].includes(r);
+export const canSendAlerts = (r: Role) => ['super_admin','qa_manager','team_lead','admin'].includes(r);
 export const isAtLeast     = (r: Role, min: Role) => roleLevel(r) >= roleLevel(min);

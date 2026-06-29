@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth';
+import Image from "next/image";
+import logo from "@/assets/file.svg";
 
 export default function LoginPage() {
   const [email,    setEmail]    = useState('admin@company.com');
@@ -17,10 +19,10 @@ export default function LoginPage() {
     try {
       const res  = await fetch('/api/auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
       const data = await res.json();
-      if (!res.ok) { setError(data.error || `Login failed (HTTP ${res.status})`); return; }
+      if (!res.ok) { setError(data.error || 'Login failed'); return; }
       setAuth(data.token, data.user);
       router.push('/dashboard');
-    } catch (err) { setError(`Network error — is the server running? (${err})`); }
+    } catch { setError('Network error — is the server running?'); }
     finally  { setLoading(false); }
   }
 
@@ -31,6 +33,17 @@ export default function LoginPage() {
       background: 'radial-gradient(1200px 600px at 20% 0%, rgba(0,80,176,.22), transparent 60%), radial-gradient(900px 500px at 80% 20%, rgba(248,208,0,.12), transparent 55%), #0B0F1A',
       color: '#F8FAFC',
     }}>
+      {/* Overrides Chrome/Edge's default white autofill background on inputs */}
+      <style>{`
+        input:-webkit-autofill,
+        input:-webkit-autofill:hover,
+        input:-webkit-autofill:focus {
+          -webkit-text-fill-color: #F8FAFC !important;
+          -webkit-box-shadow: 0 0 0px 1000px rgba(20,26,40,1) inset !important;
+          box-shadow: 0 0 0px 1000px rgba(20,26,40,1) inset !important;
+          caret-color: #F8FAFC !important;
+        }
+      `}</style>
       <div style={{
         background: 'rgba(11,15,26,.82)', border: '1px solid rgba(248,250,252,.10)',
         backdropFilter: 'blur(16px)', borderRadius: 20,
@@ -39,12 +52,14 @@ export default function LoginPage() {
       }}>
         {/* Brand */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: 10,
-            background: 'linear-gradient(135deg,#0050B0,#F8D000)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: 16, fontWeight: 800, color: '#fff',
-          }}>V</div>
+          <Image
+  src={logo}
+  alt="Vorion"
+  width={46}
+  height={46}
+  style={{ borderRadius: 20 }}
+  
+/>
           <span style={{ fontWeight: 700, fontSize: 18, letterSpacing: '-0.02em' }}>Vorion Tracker</span>
         </div>
         <p style={{ color: 'rgba(248,250,252,.45)', fontSize: 13, marginBottom: 30 }}>Sign in to your workspace</p>
@@ -84,7 +99,7 @@ export default function LoginPage() {
         </form>
 
         <p style={{ fontSize: 11, color: 'rgba(248,250,252,.2)', textAlign: 'center', marginTop: 22 }}>
-          Default: admin@company.com / admin123
+          Default: admin@vorion.com / admin123
         </p>
       </div>
     </div>

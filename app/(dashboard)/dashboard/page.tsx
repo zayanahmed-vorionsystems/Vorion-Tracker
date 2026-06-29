@@ -1,7 +1,8 @@
 'use client';
 // app/(dashboard)/dashboard/page.tsx
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useAuthStore } from '@/store/auth';
+import { fmtCompact, fmtPrecise, timeAgo } from './timeUtils';
 
 function fmt(secs: number) {
   if (!secs) return '0h 0m';
@@ -89,6 +90,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
     fontWeight: 600,
     color: '#F8FAFC',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   table: {
     width: '100%',
@@ -132,31 +136,94 @@ const styles: Record<string, React.CSSProperties> = {
 
 export default function DashboardPage() {
   const { token, user } = useAuthStore();
-  const [rows,    setRows]    = useState<any[]>([]);
-  const [date,    setDate]    = useState(new Date().toISOString().slice(0, 10));
-  const [loading, setLoading] = useState(true);
+  const [rows,       setRows]       = useState<any[]>([]);
+  const [date,       setDate]       = useState(new Date().toISOString().slice(0, 10));
+  const [loading,    setLoading]    = useState(true);
+  const [precise,    setPrecise]    = useState(false);
+  const [lastSynced, setLastSynced] = useState<Date | null>(null);
 
   useEffect(() => {
-    setLoading(true);
+    try {
+      const v = localStorage.getItem('timePrecise');
+      if (v) setPrecise(v === '1');
+    } catch {}
+  }, []);
+
+  // ── Fetch logic extracted into a stable callback ──────────────────────
+  const fetchData = useCallback(() => {
+    if (!token) return;
     fetch(`/api/reports?type=daily&date=${date}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
-      .then(r => r.json())
-      .then(d => { setRows(d.rows || []); setLoading(false); });
+      .then(async r => {
+        if (!r.ok) {
+          const text = await r.text();
+          console.error(`/api/reports failed ${r.status}`, text);
+          return { rows: [] };
+        }
+        return r.json();
+      })
+      .then(d => {
+        const normalized = (Array.isArray(d?.rows) ? d.rows : []).map((r: any) => ({
+          ...r,
+          total_seconds:    Number(r.total_seconds)    || 0,
+          screenshot_count: Number(r.screenshot_count) || 0,
+          avg_activity_pct: r.avg_activity_pct == null ? null : Number(r.avg_activity_pct),
+          session_count:    Number(r.session_count)    || 0,
+        }));
+        setRows(normalized);
+        setLoading(false);
+        setLastSynced(new Date());
+      })
+      .catch(e => {
+        console.error('Dashboard fetch error:', e);
+        setRows([]);
+        setLoading(false);
+      });
   }, [date, token]);
 
-  const active   = rows.filter(r => r.total_seconds > 0).length;
-  const totHrs   = rows.reduce((a, r) => a + (r.total_seconds || 0), 0);
-  const totShots = rows.reduce((a, r) => a + (r.screenshot_count || 0), 0);
-  const avgAct   = rows.length
-    ? Math.round(rows.reduce((a, r) => a + (r.avg_activity_pct || 0), 0) / rows.length)
-    : 0;
+  // Initial fetch whenever date or token changes
+  useEffect(() => {
+    setLoading(true);
+    fetchData();
+  }, [fetchData]);
+
+  // ── Auto-refresh every 60 seconds for active sessions ─────────────────
+  useEffect(() => {
+    const id = setInterval(fetchData, 60_000);
+    return () => clearInterval(id);
+  }, [fetchData]);
+
+  // ── Derived stats ─────────────────────────────────────────────────────
+  const active   = rows.filter(r => r.current_status === 'working' || r.current_status === 'on_break').length;
+  const totHrs   = rows.reduce((a, r) => a + r.total_seconds, 0);
+  const totShots = rows.reduce((a, r) => a + r.screenshot_count, 0);
+  const activityValues = rows
+    .map(r => r.avg_activity_pct)
+    .filter((v): v is number => v != null && Number.isFinite(v));
+  const avgAct = activityValues.length
+    ? Math.round(activityValues.reduce((a, v) => a + v, 0) / activityValues.length)
+    : null;
+
+  const statusLabels: Record<string, string> = {
+    working:      'Working',
+    on_break:     'On Break',
+    checked_out:  'Checked Out',
+    offline:      'Offline',
+  };
+
+  const statusColors: Record<string, string> = {
+    working:     '#22C55E',
+    on_break:    '#F59E0B',
+    checked_out: '#60A5FA',
+    offline:     '#94A3B8',
+  };
 
   const statCards = [
-    { label: 'Active Today',    value: active,          color: '#22C55E', sub: `of ${rows.length} employees` },
-    { label: 'Total Hours',     value: fmt(totHrs),     color: '#3B82F6', sub: 'logged today' },
-    { label: 'Screenshots',     value: totShots,        color: '#A78BFA', sub: 'taken today' },
-    { label: 'Avg Activity',    value: `${avgAct}%`,    color: avgAct < 40 ? '#F8D000' : '#22C55E', sub: 'keyboard + mouse' },
+    { label: 'Active Today',  value: active,                                                               color: '#22C55E',  sub: `of ${rows.length} employees` },
+    { label: 'Total Hours',   value: precise ? fmtPrecise(totHrs) : fmtCompact(totHrs),                   color: '#3B82F6',  sub: 'logged today' },
+    { label: 'Screenshots',   value: totShots,                                                             color: '#A78BFA',  sub: 'taken today' },
+    { label: 'Avg Activity',  value: avgAct == null ? '--' : `${avgAct}%`,                                 color: avgAct == null ? '#94A3B8' : (avgAct < 40 ? '#F8D000' : '#22C55E'), sub: 'keyboard + mouse' },
   ];
 
   return (
@@ -167,12 +234,51 @@ export default function DashboardPage() {
           <h1 style={styles.heading}>Dashboard</h1>
           <p style={styles.subtext}>Welcome back, {user?.name}</p>
         </div>
-        <input
-          type="date"
-          value={date}
-          onChange={e => setDate(e.target.value)}
-          style={styles.dateInput}
-        />
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            type="date"
+            value={date}
+            onChange={e => setDate(e.target.value)}
+            style={styles.dateInput}
+          />
+          <button
+            onClick={() => {
+              setPrecise(p => {
+                const v = !p;
+                try { localStorage.setItem('timePrecise', v ? '1' : '0'); } catch {}
+                return v;
+              });
+            }}
+            title="Toggle compact / precise time format"
+            style={{
+              padding: '8px 10px',
+              borderRadius: 10,
+              border: '1px solid rgba(248,250,252,.08)',
+              background: 'transparent',
+              color: '#F8FAFC',
+              cursor: 'pointer',
+              fontSize: 13,
+            }}
+          >
+            {precise ? 'Precise' : 'Compact'}
+          </button>
+          {/* Manual refresh button */}
+          <button
+            onClick={() => { setLoading(true); fetchData(); }}
+            title="Refresh now"
+            style={{
+              padding: '8px 10px',
+              borderRadius: 10,
+              border: '1px solid rgba(248,250,252,.08)',
+              background: 'transparent',
+              color: '#F8FAFC',
+              cursor: 'pointer',
+              fontSize: 13,
+            }}
+          >
+            ↻
+          </button>
+        </div>
       </div>
 
       {/* Stat cards */}
@@ -189,7 +295,12 @@ export default function DashboardPage() {
       {/* Table card */}
       <div style={styles.tableCard}>
         <div style={styles.tableHeader}>
-          Employee Summary — {date}
+          <span>Employee Summary — {date}</span>
+          {lastSynced && (
+            <span style={{ fontSize: 11, color: 'rgba(248,250,252,.3)', fontWeight: 400 }}>
+              Last synced: {lastSynced.toLocaleTimeString()} · auto-refreshes every 60s
+            </span>
+          )}
         </div>
 
         {loading ? (
@@ -198,7 +309,7 @@ export default function DashboardPage() {
           <table style={styles.table}>
             <thead style={styles.thead}>
               <tr>
-                {['Employee', 'Hours', 'Screenshots', 'Activity', 'Last Active'].map(h => (
+                {['Employee', 'Status', 'Hours', 'Screenshots', 'Activity', 'Last Active'].map(h => (
                   <th key={h} style={styles.th}>{h}</th>
                 ))}
               </tr>
@@ -219,13 +330,32 @@ export default function DashboardPage() {
                   {/* Name */}
                   <td style={{ ...styles.td, fontWeight: 600 }}>{r.name}</td>
 
+                  {/* Status */}
+                  <td style={styles.td}>
+                    <span style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '4px 10px',
+                      borderRadius: 999,
+                      background: 'rgba(255,255,255,.06)',
+                      color: statusColors[r.current_status ?? 'offline'] || '#94A3B8',
+                      border: `1px solid ${statusColors[r.current_status ?? 'offline'] || '#94A3B8'}20`,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      minWidth: 96,
+                    }}>
+                      {statusLabels[r.current_status] || 'Offline'}
+                    </span>
+                  </td>
+
                   {/* Hours */}
                   <td style={r.total_seconds ? styles.td : styles.tdMuted}>
-                    {fmt(r.total_seconds)}
+                    {precise ? fmtPrecise(r.total_seconds) : fmtCompact(r.total_seconds)}
                   </td>
 
                   {/* Screenshots */}
-                  <td style={styles.td}>{r.screenshot_count || 0}</td>
+                  <td style={styles.td}>{r.screenshot_count}</td>
 
                   {/* Activity bar */}
                   <td style={styles.td}>
@@ -241,21 +371,29 @@ export default function DashboardPage() {
                         <div style={{
                           height: '100%',
                           borderRadius: 2,
-                          width: `${r.avg_activity_pct || 0}%`,
-                          background: (r.avg_activity_pct || 0) < 30 ? '#F8D000' : '#22C55E',
+                          width: `${r.avg_activity_pct == null ? 0 : r.avg_activity_pct}%`,
+                          background: r.avg_activity_pct == null
+                            ? 'rgba(248,250,252,.12)'
+                            : (r.avg_activity_pct < 30 ? '#F8D000' : '#22C55E'),
                           transition: 'width .4s ease',
                         }} />
                       </div>
-                      <span style={{ fontSize: 11, color: 'rgba(248,250,252,.5)', minWidth: 28 }}>
-                        {r.avg_activity_pct || 0}%
+                      <span
+                        title={r.avg_activity_pct == null ? 'No activity data' : `${r.avg_activity_pct}%`}
+                        style={{ fontSize: 11, color: 'rgba(248,250,252,.5)', minWidth: 36 }}
+                      >
+                        {r.avg_activity_pct == null ? '—' : `${r.avg_activity_pct.toFixed(1)}%`}
                       </span>
                     </div>
                   </td>
 
                   {/* Last active */}
-                  <td style={styles.tdMuted}>
+                  <td style={styles.tdMuted} title={r.last_active ? timeAgo(r.last_active) : ''}>
                     {r.last_active
-                      ? new Date(r.last_active).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                      ? new Date(r.last_active).toLocaleString(undefined, {
+                          year: 'numeric', month: 'short', day: 'numeric',
+                          hour: '2-digit', minute: '2-digit', second: '2-digit',
+                        })
                       : '—'}
                   </td>
                 </tr>
@@ -263,7 +401,7 @@ export default function DashboardPage() {
 
               {!rows.length && (
                 <tr>
-                  <td colSpan={5} style={styles.emptyState}>
+                  <td colSpan={6} style={styles.emptyState}>
                     No data for this date
                   </td>
                 </tr>

@@ -1,0 +1,3 @@
+﻿C:\New folder\worktrack-vercel\app\(dashboard)\download\page.tsx:8:   win: process.env.NEXT_PUBLIC_AGENT_WIN_URL,
+C:\New folder\worktrack-vercel\app\(dashboard)\download\page.tsx:28:       : '# Agent download URL is not configured. Please set NEXT_PUBLIC_AGENT_WIN_URL.',
+C:\New folder\worktrack-vercel\app\api\agent\download\route.ts:4:   win: process.env.NEXT_PUBLIC_AGENT_WIN_URL,

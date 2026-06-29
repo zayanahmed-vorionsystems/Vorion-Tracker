@@ -7,11 +7,11 @@ import { useAuthStore, canMonitorAll, canManageUsers, type Role } from '@/store/
 import Image from 'next/image';
 import vorionLogo from '@/assets/vorion-logo-light.png';
 const ROLE_COLOR: Record<Role, string> = {
-  super_admin: '#A78BFA', executive: '#60A5FA', qa_manager: '#34D399',
+  super_admin: '#A78BFA', admin: '#818CF8', executive: '#60A5FA', qa_manager: '#34D399',
   team_lead: '#F8D000', employee: 'rgba(248,250,252,.5)',
 };
 const ROLE_LABEL: Record<Role, string> = {
-  super_admin: 'Super Admin', executive: 'Executive', qa_manager: 'QA Manager',
+  super_admin: 'Super Admin', admin: 'Admin', executive: 'Executive', qa_manager: 'QA Manager',
   team_lead: 'Team Lead', employee: 'Employee',
 };
 
@@ -103,11 +103,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <nav style={{ flex: 1 }}>
           <div style={{ fontSize: 10, fontWeight: 600, color: 'rgba(248,250,252,.3)', padding: '4px 10px 6px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Monitor</div>
           <NavItem href="/dashboard"   label="Dashboard" />
-          <NavItem href="/live"        label="Live Monitor"   show={canMonitorAll(role) || role === 'team_lead'} />
+          <NavItem href="/live-monitor"        label="Live Monitor"   show={canMonitorAll(role) || role === 'team_lead'} />
           <NavItem href="/screenshots" label="Screenshots" />
           <NavItem href="/timeline"    label="Timeline" />
           <div style={{ fontSize: 10, fontWeight: 600, color: 'rgba(248,250,252,.3)', padding: '14px 10px 6px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Reports</div>
           <NavItem href="/reports"     label="Reports" />
+          <NavItem href="/security"    label="Security Policies" show={canManageUsers(role)} />
           <NavItem href="/users"       label="User Management" show={canManageUsers(role)} />
           <NavItem href="/download"    label="Download Agent" />
         </nav>

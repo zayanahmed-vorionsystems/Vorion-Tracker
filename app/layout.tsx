@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'WorkTrack — Employee Monitoring',
+  title: 'Vorion Tracker',
   description: 'Time tracking & screenshot monitoring for your team',
 };
 

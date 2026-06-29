@@ -5,7 +5,10 @@ import type { NextRequest } from 'next/server';
 import type { TokenPayload } from './auth';
 
 export const ok  = (data: unknown, status = 200) => NextResponse.json(data, { status });
-export const err = (msg: string,   status = 400) => NextResponse.json({ error: msg }, { status });
+export const err = (msg: unknown, status = 400) => {
+  if (typeof msg === 'string') return NextResponse.json({ error: msg }, { status });
+  return NextResponse.json(msg as any, { status });
+};
 
 export function requireAuth(req: NextRequest): TokenPayload | NextResponse {
   const user = getTokenFromRequest(req);
