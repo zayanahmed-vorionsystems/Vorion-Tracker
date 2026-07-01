@@ -1,9 +1,11 @@
-// app/api/auth/route.ts
 import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
-import { supabaseAdmin } from '@/lib/supabase';
+import { assertSupabaseAdmin } from '@/lib/supabase';
 import { signToken } from '@/lib/auth';
 import { requireAuth, ok, err } from '@/lib/api';
+
+// This route depends on runtime env/DB state — never statically evaluate it.
+export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
@@ -38,6 +40,14 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  let admin;
+  try {
+    admin = assertSupabaseAdmin();
+  } catch (e: any) {
+    console.error('POST /api/auth config error:', e?.message || e);
+    return err('Service unavailable: auth not configured', 503);
+  }
+
   let body;
   try {
     body = await req.json();
@@ -51,7 +61,7 @@ export async function POST(req: NextRequest) {
 
   // 1. Verify credentials via Supabase Auth
   const { data: authData, error: authError } =
-    await supabaseAdmin.auth.signInWithPassword({ email, password });
+    await admin.auth.signInWithPassword({ email, password });
 
   if (authError || !authData?.user) {
     return err('Invalid credentials', 401);
@@ -90,7 +100,6 @@ export async function POST(req: NextRequest) {
       role:          profile.role,
       department_id: profile.department_id,
       employee_code: profile.employee_code,
-      // 'name' alias so existing UI (user?.name) still works
       name:          profile.full_name,
     },
   });
