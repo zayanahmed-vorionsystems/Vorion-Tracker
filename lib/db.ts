@@ -76,4 +76,3 @@ export interface Session {
   user_name?: string;
 }
 
-export const sql = new Pool({ connectionString: process.env.DATABASE_URL });
