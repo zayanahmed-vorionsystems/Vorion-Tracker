@@ -5,13 +5,13 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore, canMonitorAll, canManageUsers, type Role } from '@/store/auth';
 import Image from 'next/image';
-import vorionLogo from '@/assets/vorion-logo-light.png';
+import vorionLogo from '@/public/vorion-logo-light.png';
 const ROLE_COLOR: Record<Role, string> = {
-  super_admin: '#A78BFA', admin: '#818CF8', executive: '#60A5FA', qa_manager: '#34D399',
+  super_admin: '#A78BFA', admin: '#818CF8', qa_manager: '#34D399',
   team_lead: '#F8D000', employee: 'rgba(248,250,252,.5)',
 };
 const ROLE_LABEL: Record<Role, string> = {
-  super_admin: 'Super Admin', admin: 'Admin', executive: 'Executive', qa_manager: 'QA Manager',
+  super_admin: 'Super Admin', admin: 'Admin',  qa_manager: 'QA Manager',
   team_lead: 'Team Lead', employee: 'Employee',
 };
 

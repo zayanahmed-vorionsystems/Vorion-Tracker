@@ -3,7 +3,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-export type Role = 'super_admin'|'admin'|'executive'|'qa_manager'|'team_lead'|'employee';
+export type Role = 'super_admin'|'admin'|'qa_manager'|'team_lead'|'employee';
 
 export interface AuthUser { id:string; name:string; email:string; role:Role; teamId:string|null; }
 
@@ -30,7 +30,7 @@ export const useAuthStore = create<AuthState>()(
   )
 );
 
-const LEVELS: Record<Role,number> = { super_admin:5,admin:5,executive:4,qa_manager:3,team_lead:2,employee:1 };
+const LEVELS: Record<Role,number> = { super_admin:5,admin:5,qa_manager:4,team_lead:3,employee:1 };
 export const canMonitorAll  = (r:Role) => ['super_admin','qa_manager','admin'].includes(r);
 export const canManageUsers = (r:Role) => ['super_admin','admin'].includes(r);
 export const canSendAlerts  = (r:Role) => ['super_admin','qa_manager','team_lead','admin'].includes(r);

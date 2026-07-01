@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useAuthStore } from '@/store/auth';
-
+import Link from 'next/link';
 function fmt(s:number){ return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`; }
 
 const COLORS = {
@@ -152,7 +152,9 @@ export default function ReportsPage() {
     <div style={styles.page}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
         <h1 style={styles.heading}>Reports &amp; Analytics</h1>
-        <a href="/reports/security" style={{ color: '#F8D000', textDecoration: 'none', fontSize: 13, fontWeight: 600 }}>Security Report</a>
+        <Link href="/reports/security" style={{ color: '#F8D000', textDecoration: 'none', fontSize: 13, fontWeight: 600 }}>
+  Security Report
+</Link>
       </div>
 
       <div style={styles.grid}>

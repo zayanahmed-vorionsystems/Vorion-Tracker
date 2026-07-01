@@ -1,0 +1,159 @@
+// agent/src/websiteBlock.ts
+import fs   from 'fs';
+import path from 'path';
+import os   from 'os';
+import http from 'http';
+import { app } from 'electron';
+
+const PAC_DIR  = path.join(app.getPath('userData'), 'proxy');
+const PAC_PATH = path.join(PAC_DIR, 'worktrack-block.pac');
+const PAC_PORT = 7799;
+const DEAD_PORT = 9;
+
+let lastProxyDomainsKey = '';
+let pacServer: http.Server | null = null;
+let currentPacContent  = '';
+let proxyAppliedOnce   = false; // track if we've already killed Chrome once this session
+
+// ─── PAC content ─────────────────────────────────────────────────────────────
+function buildPacContent(domains: string[]): string {
+  const domainList = JSON.stringify(domains);
+  return `function FindProxyForURL(url, host) {
+  var blocked = ${domainList};
+  host = host.toLowerCase().replace(/^www\\./, '');
+  for (var i = 0; i < blocked.length; i++) {
+    if (host === blocked[i] || host.indexOf('.' + blocked[i]) !== -1) {
+      return "PROXY 127.0.0.1:${DEAD_PORT}";
+    }
+  }
+  return "DIRECT";
+}`;
+}
+
+// ─── Local HTTP server (Chrome only trusts http:// PAC, not file:///) ────────
+function startPacServer(pacContent: string): Promise<void> {
+  return new Promise((resolve) => {
+    currentPacContent = pacContent;
+    if (pacServer) { resolve(); return; }
+
+    pacServer = http.createServer((_req, res) => {
+      res.writeHead(200, {
+        'Content-Type'  : 'application/x-ns-proxy-autoconfig',
+        'Cache-Control' : 'no-cache, no-store',
+      });
+      res.end(currentPacContent);
+    });
+
+    pacServer.listen(PAC_PORT, '127.0.0.1', () => {
+      console.log(`[SECURITY] PAC server listening on http://127.0.0.1:${PAC_PORT}/proxy.pac`);
+      resolve();
+    });
+
+    pacServer.on('error', (err: any) => {
+      console.warn('[SECURITY] PAC server error:', err?.message);
+      resolve();
+    });
+  });
+}
+
+function stopPacServer() {
+  pacServer?.close();
+  pacServer = null;
+}
+
+// ─── Registry (HKCU — no admin needed) ───────────────────────────────────────
+function applyProxyRegistry(enable: boolean): Promise<void> {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve();
+    const { exec } = require('child_process');
+    const pacUrl = `http://127.0.0.1:${PAC_PORT}/proxy.pac`;
+
+    const lines = enable
+      ? [
+          `Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" -Name AutoConfigURL -Value "${pacUrl}"`,
+          `Set-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" -Name ProxyEnable   -Value 0`,
+        ]
+      : [
+          `Remove-ItemProperty -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" -Name AutoConfigURL -ErrorAction SilentlyContinue`,
+          `Set-ItemProperty    -Path "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" -Name ProxyEnable   -Value 0`,
+        ];
+
+    const refresh = `
+Add-Type @"
+using System;using System.Runtime.InteropServices;
+public class WI { [DllImport("wininet.dll")] public static extern bool InternetSetOption(IntPtr h,int o,IntPtr b,int l); }
+"@
+[WI]::InternetSetOption([IntPtr]::Zero,39,[IntPtr]::Zero,0)|Out-Null
+[WI]::InternetSetOption([IntPtr]::Zero,37,[IntPtr]::Zero,0)|Out-Null`;
+
+    const script = [...lines, refresh].join('\n');
+    const tmp = path.join(os.tmpdir(), `wt-proxy-${Date.now()}.ps1`);
+    fs.writeFileSync(tmp, script, 'utf8');
+
+    exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${tmp}"`, (err: any) => {
+      try { fs.unlinkSync(tmp); } catch {}
+      if (err) console.error('[SECURITY] Registry error:', err?.message || err);
+      else     console.log(`[SECURITY] Proxy registry ${enable ? 'set → ' + pacUrl : 'cleared'}`);
+      resolve();
+    });
+  });
+}
+
+// ─── Kill Chrome once so it restarts and picks up new proxy settings ──────────
+// Chrome caches proxy settings at startup — existing windows won't see changes
+// until Chrome is fully restarted. We kill it once per agent session right after
+// first applying the PAC; after that Chrome stays open normally.
+function killChromeOnce(): Promise<void> {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve();
+    if (proxyAppliedOnce) return resolve(); // only do this once per session
+    proxyAppliedOnce = true;
+
+    const { exec } = require('child_process');
+    exec('taskkill /F /IM chrome.exe', (err: any) => {
+      if (err) {
+        // Chrome may not be running — that's fine
+        console.log('[SECURITY] Chrome was not running (or already closed), proxy will apply on next launch');
+      } else {
+        console.log('[SECURITY] Chrome restarted to apply proxy settings — blocked sites will now be unreachable');
+      }
+      resolve();
+    });
+  });
+}
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+export async function syncProxyBlock(cachedPolicy: any, cachedBlockedWebsites: any[]) {
+  if (!cachedPolicy || !cachedPolicy.blockWebsites) {
+    await removeProxyBlock();
+    return;
+  }
+
+  const domains = cachedBlockedWebsites
+    .filter((item: any) => item?.enabled)
+    .map((item: any) => (item.domain || '').toLowerCase().replace(/^www\./, ''))
+    .filter(Boolean);
+
+  const domainsKey = JSON.stringify(domains.slice().sort());
+  if (domainsKey === lastProxyDomainsKey) return; // nothing changed
+  lastProxyDomainsKey = domainsKey;
+
+  if (!domains.length) { await removeProxyBlock(); return; }
+
+  const pacContent = buildPacContent(domains);
+  try { fs.mkdirSync(PAC_DIR, { recursive: true }); fs.writeFileSync(PAC_PATH, pacContent, 'utf8'); } catch {}
+
+  await startPacServer(pacContent);
+  await applyProxyRegistry(true);
+  await killChromeOnce(); // <- one-time restart so Chrome picks up PAC
+  console.log('[SECURITY] Website block active — domains:', domains.join(', '));
+}
+
+export async function removeProxyBlock() {
+  if (!lastProxyDomainsKey || lastProxyDomainsKey === '[]') return;
+  lastProxyDomainsKey = '[]';
+  proxyAppliedOnce    = false;
+  await applyProxyRegistry(false);
+  stopPacServer();
+  console.log('[SECURITY] Website block removed');
+}

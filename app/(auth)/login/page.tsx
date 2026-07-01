@@ -4,7 +4,6 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth';
 import Image from "next/image";
-import logo from "@/assets/file.svg";
 
 export default function LoginPage() {
   const [email,    setEmail]    = useState('admin@company.com');

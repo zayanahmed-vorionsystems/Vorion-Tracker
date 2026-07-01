@@ -222,18 +222,18 @@ export async function deleteBlockedWebsite(id: string): Promise<boolean> {
 export async function createSecurityEvent(input: { employeeId: string | null; computerName: string | null; eventType: string; value: string | null; actionTaken: string | null }): Promise<SecurityEventRecord> {
   await ensureSecuritySchema();
   const rows = await sql`
-    INSERT INTO security_events (employee_id, computer_name, event_type, value, action_taken)
-    VALUES (${input.employeeId}, ${input.computerName}, ${input.eventType}, ${input.value}, ${input.actionTaken})
-    RETURNING id, employee_id, computer_name, event_type, value, action_taken, created_at
+    INSERT INTO security_events (employee_id, computer_name, type, target, action, details)
+    VALUES (${input.employeeId}, ${input.computerName}, ${input.eventType}, ${input.value}, ${input.actionTaken}, ${null})
+    RETURNING id, employee_id, computer_name, type, target, action, details, created_at
   `;
   const row = rows?.[0];
   return {
     id: row.id,
     employeeId: row.employee_id,
     computerName: row.computer_name,
-    eventType: row.event_type,
-    value: row.value,
-    actionTaken: row.action_taken,
+    eventType: row.type,
+    value: row.target,
+    actionTaken: row.action,
     createdAt: row.created_at,
   };
 }
@@ -246,9 +246,9 @@ export async function listSecurityEvents(options: { employeeId?: string | null; 
       se.id,
       se.employee_id,
       se.computer_name,
-      se.event_type,
-      se.value,
-      se.action_taken,
+      se.type,
+      se.target,
+      se.action,
       se.created_at,
       p.full_name AS employee_name
     FROM security_events se
@@ -260,7 +260,7 @@ export async function listSecurityEvents(options: { employeeId?: string | null; 
   const filtered = (rows || []).filter((row: any) => {
     if (options.viewAs === 'employee' && options.employeeId && row.employee_id !== options.employeeId) return false;
     if (options.employeeId && row.employee_id !== options.employeeId) return false;
-    if (options.eventType && row.event_type !== options.eventType) return false;
+    if (options.eventType && row.type !== options.eventType) return false;
     if (options.date && new Date(row.created_at).toISOString().slice(0, 10) !== options.date) return false;
     return true;
   });
@@ -269,10 +269,11 @@ export async function listSecurityEvents(options: { employeeId?: string | null; 
     id: row.id,
     employeeId: row.employee_id,
     computerName: row.computer_name,
-    eventType: row.event_type,
-    value: row.value,
-    actionTaken: row.action_taken,
+    eventType: row.type,
+    value: row.target,
+    actionTaken: row.action,
     createdAt: row.created_at,
     employeeName: row.employee_name,
   }));
 }
+

@@ -7,7 +7,7 @@ const styles: Record<string, React.CSSProperties> = {
   card: { border: '1px solid rgba(248,250,252,.10)', background: 'rgba(11,15,26,.72)', backdropFilter: 'blur(10px)', borderRadius: 16, padding: '18px 20px', boxShadow: '0 8px 24px rgba(0,0,0,.22)', marginBottom: 16 },
   header: { fontSize: 20, fontWeight: 700, marginBottom: 8 },
   sub: { fontSize: 13, color: 'rgba(248,250,252,.45)', marginBottom: 12 },
-  input: { padding: '8px 10px', borderRadius: 10, border: '1px solid rgba(248,250,252,.12)', background: 'rgba(248,250,252,.05)', color: '#F8FAFC', fontSize: 13 },
+  input: { padding: '8px 10px', borderRadius: 10, border: '1px solid rgba(248,250,252,.12)', background: 'rgb(238, 231, 231)', color: '#000000', fontSize: 13 },
   button: { padding: '9px 14px', borderRadius: 10, border: '1px solid rgba(248,208,0,.35)', background: 'linear-gradient(180deg, rgba(248,208,0,.5), rgba(248,208,0,.3))', color: '#0B0F1A', fontWeight: 700, cursor: 'pointer' },
   table: { width: '100%', borderCollapse: 'collapse' as const, fontSize: 13 },
   th: { padding: '10px 12px', textAlign: 'left' as const, color: 'rgba(248,250,252,.45)', fontSize: 11, textTransform: 'uppercase' as const, letterSpacing: '0.06em', borderBottom: '1px solid rgba(248,250,252,.08)' },

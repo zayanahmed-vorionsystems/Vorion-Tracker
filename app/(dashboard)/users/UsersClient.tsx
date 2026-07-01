@@ -21,7 +21,7 @@ const styles: Record<string, React.CSSProperties> = {
   button: { padding: '8px 16px', borderRadius: 8, background: '#1e293b', color: '#fff', border: 'none', fontSize: 13, fontWeight: 500, cursor: 'pointer' },
   card: { border: '1px solid rgba(248,250,252,.10)', background: 'rgba(11,15,26,.72)', backdropFilter: 'blur(10px)', borderRadius: 16, padding: '20px', marginBottom: 20, boxShadow: '0 8px 24px rgba(0,0,0,.22)' },
   cardHeader: { fontSize: 14, fontWeight: 600, marginBottom: 16, color: '#F8FAFC' },
-  input: { width:'100%', padding:'7px 10px', borderRadius:8, border:'1px solid rgba(248,250,252,.12)', fontSize:13, outline:'none', background:'rgba(248,250,252,.06)', color:'#F8FAFC' },
+  input: { width:'100%', padding:'7px 10px', borderRadius:8, border:'1px solid rgba(248,250,252,.12)', fontSize:13, outline:'none', background:'rgb(255, 255, 255)', color:'#000000' },
   tableCard: { border: '1px solid rgba(248,250,252,.10)', background: 'rgba(11,15,26,.72)', backdropFilter: 'blur(10px)', borderRadius: 16, overflow: 'hidden', boxShadow: '0 8px 24px rgba(0,0,0,.22)' },
   th: { padding:'10px 16px', textAlign:'left', fontWeight:500, color:'rgba(248,250,252,.45)', fontSize:12, textTransform:'uppercase', letterSpacing:'0.06em', borderBottom:'1px solid rgba(248,250,252,.08)' },
   td: { padding:'10px 16px', color:'#F8FAFC', fontSize:13 },

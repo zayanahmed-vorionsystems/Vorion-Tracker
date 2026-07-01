@@ -10,7 +10,7 @@ import os     from 'os';
 import https  from 'https';
 import http   from 'http';
 import type { IncomingMessage } from 'http';
-
+import { syncProxyBlock, removeProxyBlock } from './websiteBlock';
 // ─── Config ────────────────────────────────────────────────────────────────
 const isDev      = !app.isPackaged;
 const SERVER_URL = process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || (isDev ? 'http://127.0.0.1:3000' : 'https://your-app.vercel.app');
@@ -55,6 +55,8 @@ let cachedBlockedWebsites: any[] = [];
 let policySyncInterval: NodeJS.Timeout|null = null;
 let policySyncInFlight = false;
 let lastKnownUrl = '';
+// tracks which blocked domains we've already reported recently, to avoid spamming events
+const recentlyReportedDomains = new Map<string, number>();
 set('agentId', agentId);
 
 // ─── Single instance lock ───────────────────────────────────────────────────
@@ -253,6 +255,97 @@ async function markAlertRead(id:string) {
   }
 }
 
+// ─── Hosts-file based website blocking ──────────────────────────────────────
+// Instead of killing the entire browser when a blocked site is detected,
+// we redirect the blocked domains to 127.0.0.1 in the OS hosts file.
+// The browser itself will then show "This site can't be reached" /
+// "refused to connect" for that domain — Chrome (and any other browser)
+// stays open and unaffected for every other site.
+const HOSTS_PATH =
+  process.platform === 'win32'
+    ? 'C:\\Windows\\System32\\drivers\\etc\\hosts'
+    : '/etc/hosts';
+const MARK_START = '# WORKTRACK-BLOCK-START';
+const MARK_END   = '# WORKTRACK-BLOCK-END';
+let lastHostsDomainsKey = '';
+
+function flushDnsCache() {
+  const { exec } = require('child_process');
+  if (process.platform === 'win32') {
+    exec('ipconfig /flushdns');
+  } else if (process.platform === 'darwin') {
+    exec('dscacheutil -flushcache; killall -HUP mDNSResponder');
+  }
+  // Linux DNS caching varies by distro; most browsers re-resolve on next request anyway.
+}
+
+function syncHostsFile() {
+  if (!cachedPolicy || !cachedPolicy.blockWebsites) {
+    removeHostsBlock();
+    return;
+  }
+
+  const domains = cachedBlockedWebsites
+    .filter((item: any) => item?.enabled)
+    .map((item: any) => (item.domain || '').toLowerCase().replace(/^www\./, ''))
+    .filter(Boolean);
+
+  const domainsKey = JSON.stringify(domains.slice().sort());
+  if (domainsKey === lastHostsDomainsKey) return; // nothing changed, skip disk write
+  lastHostsDomainsKey = domainsKey;
+
+  try {
+    let content = '';
+    try {
+      content = fs.readFileSync(HOSTS_PATH, 'utf8');
+    } catch (readErr: any) {
+      console.error('[SECURITY] Could not read hosts file:', readErr?.message || readErr);
+      return;
+    }
+
+    // strip any previous block we wrote
+    const startIdx = content.indexOf(MARK_START);
+    const endIdx = content.indexOf(MARK_END);
+    if (startIdx !== -1 && endIdx !== -1) {
+      content = content.slice(0, startIdx) + content.slice(endIdx + MARK_END.length);
+    }
+
+    if (domains.length) {
+      const lines = domains.flatMap((d: string) => [
+        `127.0.0.1 ${d}`,
+        `127.0.0.1 www.${d}`,
+      ]);
+      content = content.replace(/\s+$/, '') + `\n\n${MARK_START}\n${lines.join('\n')}\n${MARK_END}\n`;
+    } else {
+      content = content.replace(/\s+$/, '') + '\n';
+    }
+
+    fs.writeFileSync(HOSTS_PATH, content, 'utf8');
+    flushDnsCache();
+    console.log('[SECURITY] Hosts file synced, blocked domains:', domains.length);
+  } catch (err: any) {
+    console.error('[SECURITY] Failed to write hosts file (run agent as Administrator):', err?.message || err);
+  }
+}
+
+function removeHostsBlock() {
+  if (lastHostsDomainsKey === '[]') return; // already clean
+  try {
+    let content = fs.readFileSync(HOSTS_PATH, 'utf8');
+    const startIdx = content.indexOf(MARK_START);
+    const endIdx = content.indexOf(MARK_END);
+    if (startIdx !== -1 && endIdx !== -1) {
+      content = content.slice(0, startIdx) + content.slice(endIdx + MARK_END.length);
+      fs.writeFileSync(HOSTS_PATH, content.replace(/\s+$/, '') + '\n', 'utf8');
+      flushDnsCache();
+      console.log('[SECURITY] Hosts file block list cleared');
+    }
+    lastHostsDomainsKey = '[]';
+  } catch (err: any) {
+    console.error('[SECURITY] Failed to clean hosts file:', err?.message || err);
+  }
+}
+
 async function syncPolicies() {
   if (!token) return;
   if (policySyncInFlight) return;
@@ -272,7 +365,7 @@ async function syncPolicies() {
     const changed = JSON.stringify(cachedPolicy) !== JSON.stringify(nextPolicy) ||
       JSON.stringify(cachedBlockedApps) !== JSON.stringify(nextBlockedApps) ||
       JSON.stringify(cachedBlockedWebsites) !== JSON.stringify(nextBlockedWebsites);
-
+    syncProxyBlock(cachedPolicy, cachedBlockedWebsites);
     cachedPolicy = nextPolicy;
     cachedBlockedApps = nextBlockedApps;
     cachedBlockedWebsites = nextBlockedWebsites;
@@ -286,6 +379,9 @@ async function syncPolicies() {
     } else {
       console.log('Policy sync succeeded');
     }
+
+    // Keep the hosts file in sync with the latest policy/blocked-website list
+    await syncProxyBlock(cachedPolicy, cachedBlockedWebsites);
   } catch (err:any) {
     console.error('[SECURITY] Policy sync failed:', err?.message || err);
   } finally {
@@ -333,77 +429,59 @@ function normalizeProcessName(name:string) {
   return (name || '').trim().toLowerCase().replace(/\.exe$/i, '');
 }
 
+// ─── Website "violation" detection (reporting only — no longer kills the browser) ──
+// The hosts file is what actually blocks the site (see syncHostsFile above).
+// This scan just detects when a user *attempted* to view a blocked site (by
+// window title) so it can be logged/reported to the dashboard. It no longer
+// shows a dialog or terminates the browser process.
 async function scanBlockedWebsites() {
   if (!token || !cachedPolicy || !cachedPolicy.blockWebsites || !cachedBlockedWebsites.length) return;
-
-  console.log('[SECURITY] Scanning processes...');
-  let violationFound = false;
 
   try {
     const { default: activeWin } = await import('active-win');
     const win = await activeWin();
-    const winAny = win as any;
-    const urlCandidate = (typeof winAny?.url === 'string' ? winAny.url : '') || win?.title || '';
-    let hostname = '';
+    const ownerName = (win?.owner?.name || '').toLowerCase();
+    const title = win?.title || '';
+    console.log('[SECURITY] [DEBUG] owner.name=', JSON.stringify(win?.owner?.name), 'title=', JSON.stringify(title));
 
-    if (typeof urlCandidate === 'string' && urlCandidate.trim()) {
-      const candidate = urlCandidate.trim();
-      try {
-        const normalizedUrl = candidate.startsWith('http') ? candidate : `https://${candidate}`;
-        hostname = new URL(normalizedUrl).hostname.toLowerCase();
-      } catch {
-        const extracted = candidate.match(/https?:\/\/([^\/\s]+)/i)?.[1]
-          || candidate.match(/([^\s\|\-]+\.[a-z]{2,})(?:\/|\s|$)/i)?.[1];
-        hostname = extracted ? extracted.toLowerCase().replace(/^www\./, '') : '';
-      }
-    }
-
-    if (!hostname) {
+    const isBrowser = ['chrome', 'msedge', 'edge', 'firefox', 'brave'].some((b) => ownerName.includes(b));
+    if (!isBrowser || !title) {
+      console.log('[SECURITY] [DEBUG] Not recognized as browser, skipping');
       return;
     }
 
-    const blockedDomains = cachedBlockedWebsites
-      .filter((item:any) => item?.enabled)
-      .map((item:any) => (item.domain || '').toLowerCase().replace(/^www\./, ''))
-      .filter(Boolean);
+    console.log('[SECURITY] Active browser window title:', title);
 
-    console.log('[SECURITY] Active window hostname:', hostname, 'title:', win?.title, 'url:', (win as any)?.url);
-    console.log('[SECURITY] Blocked domains:', blockedDomains.join(', '));
+    const blockedDomains = cachedBlockedWebsites
+      .filter((item: any) => item?.enabled)
+      .map((item: any) => (item.domain || '').toLowerCase().replace(/^www\./, ''))
+      .filter(Boolean);
 
     if (!blockedDomains.length) return;
 
-    const matchedDomain = blockedDomains.find((domain:string) => {
-      if (hostname === domain) return true;
-      return hostname.endsWith(`.${domain}`);
+    const lowerTitle = title.toLowerCase();
+
+    const matchedDomain = blockedDomains.find((domain: string) => {
+      const brand = domain.split('.')[0];
+      return lowerTitle.includes(domain) || (brand.length > 2 && lowerTitle.includes(brand));
     });
 
     if (!matchedDomain) {
-      if (!violationFound) console.log('[SECURITY] No violations found');
+      console.log('[SECURITY] No violations found');
       return;
     }
 
-    violationFound = true;
-    console.log('[SECURITY] Blocked website detected:', matchedDomain);
+    console.log('[SECURITY] 🚨 Blocked website attempt detected:', matchedDomain, '(title:', title, ')');
 
-    if (cachedPolicy.showWarning) {
-      dialog.showMessageBoxSync({
-        type: 'warning',
-        title: 'Blocked Website',
-        message: `This website is blocked by your organization: ${matchedDomain}`,
-      });
+    // Avoid spamming an event every 2s while the tab stays open — only report
+    // once per domain per 5-minute window.
+    const now = Date.now();
+    const lastReportedAt = recentlyReportedDomains.get(matchedDomain) || 0;
+    if (now - lastReportedAt > 5 * 60 * 1000) {
+      recentlyReportedDomains.set(matchedDomain, now);
+      await submitSecurityEvent('blocked_website', matchedDomain, 'hosts_redirect');
     }
-
-    if (cachedPolicy.killProcess && win?.owner?.name) {
-      const targetProcess = normalizeProcessName(win.owner.name) + '.exe';
-      await new Promise<void>((resolve) => {
-        const { exec } = require('child_process');
-        exec(`taskkill /F /IM ${targetProcess}`, () => resolve());
-      });
-      console.log('[SECURITY] Browser terminated');
-    }
-
-    await submitSecurityEvent('blocked_website', hostname, cachedPolicy.killProcess ? 'terminated' : 'Warning Shown');
-  } catch (err:any) {
+  } catch (err: any) {
     console.error('[SECURITY] Blocked website scan error:', err?.message || err);
   }
 }
@@ -413,10 +491,10 @@ async function scanBlockedApps() {
 
   try {
     const { exec } = await import('child_process');
-    
+
     // ✅ WMIC use karo — tasklist se zyada reliable
     const output = await new Promise<string>((resolve, reject) => {
-      exec('wmic process get Name /FORMAT:CSV', 
+      exec('wmic process get Name /FORMAT:CSV',
         { maxBuffer: 1024 * 1024 * 10 }, // 10MB buffer
         (error, stdout) => error ? reject(error) : resolve(stdout)
       );
@@ -453,10 +531,10 @@ async function scanBlockedApps() {
       console.log(`[SECURITY] 🚨 Found blocked process: ${processName}`);
 
       if (cachedPolicy.showWarning) {
-        dialog.showMessageBoxSync({ 
-          type: 'warning', 
-          title: 'Blocked Application', 
-          message: `"${processName}" is blocked by your organization and will be closed.` 
+        dialog.showMessageBoxSync({
+          type: 'warning',
+          title: 'Blocked Application',
+          message: `"${processName}" is blocked by your organization and will be closed.`
         });
       }
 
@@ -468,8 +546,8 @@ async function scanBlockedApps() {
       }
 
       await submitSecurityEvent(
-        'blocked_app', 
-        normalizedProcess, 
+        'blocked_app',
+        normalizedProcess,
         cachedPolicy.killProcess ? 'terminated' : 'warning_shown'
       );
     }
@@ -482,6 +560,7 @@ async function scanBlockedApps() {
     console.error('[SECURITY] Blocked app scan error:', err?.message || err);
   }
 }
+
 async function enforcePolicies() {
   if (!token) return;
 
@@ -793,4 +872,4 @@ app.whenReady().then(async ()=>{
 });
 
 app.on('window-all-closed',()=>{ /* keep alive in tray */ });
-app.on('before-quit',()=>{ tracking && stopTracking(); });
+app.on('before-quit',()=>{ tracking && stopTracking(); removeProxyBlock(); });
