@@ -1,6 +1,5 @@
 
 'use server';
-export const dynamic = 'force-dynamic';
 import { sql } from '@/lib/db';
 import UsersClient from './UsersClient';
 
