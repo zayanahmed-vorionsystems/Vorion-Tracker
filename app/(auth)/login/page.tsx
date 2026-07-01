@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth';
 import Image from "next/image";
-
+import logo from '@/public/vorion-logo-light.png';
 export default function LoginPage() {
   const [email,    setEmail]    = useState('admin@company.com');
   const [password, setPassword] = useState('');
