@@ -1,7 +1,7 @@
 'use server';
 import { sql } from '@/lib/db';
 import UsersClient from './UsersClient';
-
+export const dynamic = 'force-dynamic';
 export default async function Page() {
   // Server-side fetch from `public.profiles` for initial render.
   const rows = await sql`
