@@ -120,12 +120,11 @@ export async function POST(req: NextRequest) {
     `;
     return ok(u, 201);
   } catch (e: any) {
-    console.error('Create profile error:', e);
-    // Roll back the auth user if profile insert fails
-    await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
-    if (e.code === '23505') return err('Email already exists', 409);
-    throw e;
-  }
+  console.error('Create profile error:', e);
+  await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
+  if (e.code === '23505') return err('Email already exists', 409);
+  return err(e?.message || 'Failed to create user profile', 500);  // throw ki jagah return
+}
 }
 
 export async function DELETE(req: NextRequest) {

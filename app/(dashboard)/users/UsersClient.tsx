@@ -74,9 +74,15 @@ export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
         body: JSON.stringify(body),
       });
 
-      const data = await res.json();
+      let data: any = {};
+      try {
+        data = await res.json();
+      } catch {
+        data = {};
+      }
+
       if (!res.ok) {
-        setError(data.error || 'Failed');
+        setError(data.error || `Failed (status ${res.status})`);
         return;
       }
 
