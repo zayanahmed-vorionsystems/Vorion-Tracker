@@ -761,7 +761,15 @@ function createWindow() {
     webPreferences:{ preload:path.join(__dirname,'preload.js'), contextIsolation:true, nodeIntegration:false },
     show: true,
   });
+mainWindow.webContents.openDevTools();
 
+mainWindow.webContents.on('did-fail-load', (_, code, desc, url) => {
+  console.log('LOAD FAILED:', code, desc, url);
+});
+
+mainWindow.webContents.on('render-process-gone', (_, details) => {
+  console.log('RENDERER CRASHED:', details);
+});
   if (isDev) {
   mainWindow.loadURL('http://localhost:5174');
 } else {
