@@ -103,7 +103,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <nav style={{ flex: 1 }}>
           <div style={{ fontSize: 10, fontWeight: 600, color: 'rgba(248,250,252,.3)', padding: '4px 10px 6px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Monitor</div>
           <NavItem href="/dashboard"   label="Dashboard" />
-          <NavItem href="/live-monitor"        label="Live Monitor"   show={canMonitorAll(role) || role === 'team_lead'} />
+          <NavItem href="/live"        label="Live Monitor"   show={canMonitorAll(role) || role === 'team_lead'} />
           <NavItem href="/screenshots" label="Screenshots" />
           <NavItem href="/timeline"    label="Timeline" />
           <div style={{ fontSize: 10, fontWeight: 600, color: 'rgba(248,250,252,.3)', padding: '14px 10px 6px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Reports</div>

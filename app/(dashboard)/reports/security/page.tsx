@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/auth';
-
+import { useRouter } from 'next/navigation';
 const styles: Record<string, React.CSSProperties> = {
   page: { minHeight: '100vh', background: 'radial-gradient(1200px 600px at 20% 0%, rgba(0,80,176,.18), transparent 60%), radial-gradient(900px 500px at 80% 20%, rgba(248,208,0,.10), transparent 55%), #0B0F1A', color: '#F8FAFC', fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif', padding: '28px 32px' },
   card: { border: '1px solid rgba(248,250,252,.10)', background: 'rgba(11,15,26,.72)', backdropFilter: 'blur(10px)', borderRadius: 16, padding: '18px 20px', boxShadow: '0 8px 24px rgba(0,0,0,.22)', marginBottom: 16 },
@@ -55,9 +55,21 @@ export default function SecurityReportPage() {
     printWindow.document.write('<html><body><h2>Security Report</h2><pre>' + JSON.stringify(events, null, 2) + '</pre></body></html>');
     printWindow.document.close(); printWindow.print();
   };
-
+const router = useRouter();
   return (
+    
     <div style={styles.page}>
+      <div style={{ marginBottom: 16 }}>
+  <button
+    style={{
+      ...styles.button,
+      marginRight: 10,
+    }}
+    onClick={() => router.back()}
+  >
+    ← Back
+  </button>
+</div>
       <h1 style={styles.header}>Security Report</h1>
       <p style={styles.sub}>Review blocked website and application events.</p>
       <div style={styles.card}>

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 import { useAuthStore, canSendAlerts } from '@/store/auth';
 import { supabaseClient } from '@/lib/supabase';
-
+import { useRouter } from 'next/navigation';
 interface Employee {
   id: string;
   name: string;
@@ -115,6 +115,7 @@ export default function LiveMonitorPage() {
   const [alertMsg, setAlertMsg] = useState('');
   const [alertTo, setAlertTo] = useState('');
   const [sending, setSending] = useState(false);
+  const router = useRouter();
 
   useEffect(() => {
     (async () => {
@@ -268,9 +269,25 @@ export default function LiveMonitorPage() {
     <div style={styles.page}>
       {/* Top row */}
       <div style={styles.topRow}>
-        <div>
-          <h1 style={styles.heading}>Live Monitor</h1>
-          <p style={styles.subtext}>Real-time employee agent status updates</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button
+            onClick={() => router.back()}
+            style={{
+              padding: '8px 14px',
+              borderRadius: 10,
+              border: '1px solid rgba(248,208,0,.35)',
+              background: 'linear-gradient(180deg, rgba(248,208,0,.5), rgba(248,208,0,.3))',
+              color: '#0B0F1A',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            ← Back
+          </button>
+          <div>
+            <h1 style={styles.heading}>Live Monitor</h1>
+            <p style={styles.subtext}>Real-time employee agent status updates</p>
+          </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={styles.onlinePill}>
