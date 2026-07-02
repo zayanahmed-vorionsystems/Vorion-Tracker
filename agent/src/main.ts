@@ -762,8 +762,11 @@ function createWindow() {
     show: true,
   });
 
-  if (isDev) mainWindow.loadURL('http://localhost:5174');
-  else       mainWindow.loadFile(path.join(__dirname,'../renderer/index.html'));
+  if (isDev) {
+  mainWindow.loadURL('http://localhost:5174');
+} else {
+  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+}
 
   mainWindow.on('close',(e)=>{ e.preventDefault(); mainWindow?.hide(); });
 }
