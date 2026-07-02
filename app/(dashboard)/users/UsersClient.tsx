@@ -161,10 +161,7 @@ export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
                   {ROLES.map(r=><option key={r} value={r}>{r.replace(/_/g,' ')}</option>)}
                 </select>
               </div>
-              <div>
-                <label style={{ fontSize:11,fontWeight:500,display:'block',marginBottom:4 }}>Department ID</label>
-                <input style={styles.input} value={form.departmentId} onChange={e=>F('departmentId',e.target.value)} placeholder="optional department id" />
-              </div>
+              
             </div>
             <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12 }}>
               <div>
