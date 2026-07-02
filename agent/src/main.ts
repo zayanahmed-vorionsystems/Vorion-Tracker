@@ -13,8 +13,8 @@ import type { IncomingMessage } from 'http';
 import { syncProxyBlock, removeProxyBlock } from './websiteBlock';
 // ─── Config ────────────────────────────────────────────────────────────────
 const isDev      = !app.isPackaged;
-const SERVER_URL = process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || (isDev ? 'http://127.0.0.1:3000' : 'https://vorion-tracker-rosy.vercel.app');
-const SOCKET_SERVER_URL = process.env.SOCKET_SERVER_URL || (isDev ? 'http://127.0.0.1:4000' : 'https://vorion-tracker-rosy.vercel.app');
+const SERVER_URL = process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || (isDev ? 'http://127.0.0.1:3000' : 'https://vorion-tracker-ojh9k51q4-vorion1.vercel.app/');
+const SOCKET_SERVER_URL = process.env.SOCKET_SERVER_URL || (isDev ? 'http://127.0.0.1:4000' : 'https://vorion-tracker-ojh9k51q4-vorion1.vercel.app/');
 
 // ─── Persistent store ──────────────────────────────────────────────────────
 const DATA_DIR   = app.getPath('userData');
