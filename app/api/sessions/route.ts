@@ -79,7 +79,12 @@ export async function POST(req: NextRequest) {
         VALUES(${attendance.id}, NOW())
         RETURNING id
       `;
-
+await sql`
+  UPDATE attendance
+  SET total_minutes =
+    FLOOR(EXTRACT(EPOCH FROM (NOW() - check_in)) / 60)::int
+  WHERE id = ${attendance.id}
+`;
       await sql`
         UPDATE attendance
         SET status = 'on_break'
@@ -155,12 +160,32 @@ export async function POST(req: NextRequest) {
       }
 
       if (!attendance) return err('Attendance record not found', 404);
+const breakResult = await sql`
+  SELECT COALESCE(SUM(duration_minutes), 0) AS break_minutes
+  FROM breaks
+  WHERE attendance_id = ${attendance.id}
+`;
 
-      const minutesResult = await sql`
-        SELECT FLOOR(EXTRACT(EPOCH FROM (NOW() - ${attendance.check_in})) / 60)::int AS total_minutes
-      `;
-      const minutes = minutesResult?.[0]?.total_minutes ?? 0;
+const breakMinutes = breakResult?.[0]?.break_minutes ?? 0;
 
+const minutesResult = await sql`
+  SELECT
+    GREATEST(
+      FLOOR(EXTRACT(EPOCH FROM (NOW() - ${attendance.check_in})) / 60)::int - ${breakMinutes},
+      0
+    ) AS total_minutes
+`;
+
+const minutes = minutesResult?.[0]?.total_minutes ?? 0;
+
+await sql`
+  UPDATE breaks
+  SET
+    end_time = NOW(),
+    duration_minutes = CEIL(EXTRACT(EPOCH FROM (NOW() - start_time)) / 60)::int
+  WHERE attendance_id = ${attendance.id}
+    AND end_time IS NULL
+`;
       await sql`
         UPDATE attendance
         SET check_out = NOW(), total_minutes = ${minutes}, status = 'checked_out'

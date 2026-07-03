@@ -12,8 +12,11 @@ function fmt(secs: number) {
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: '100vh',
-    background:
-      'radial-gradient(1200px 600px at 20% 0%, rgba(0,80,176,.22), transparent 60%), radial-gradient(900px 500px at 80% 20%, rgba(248,208,0,.12), transparent 55%), #0B0F1A',
+    background: `
+linear-gradient(180deg,#020617,#0F172A),
+radial-gradient(circle at top left,#2563EB30 0%,transparent 35%),
+radial-gradient(circle at bottom right,#9333EA20 0%,transparent 40%)
+`,
     color: '#F8FAFC',
     fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif',
     padding: '28px 32px',
@@ -52,13 +55,17 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 24,
   },
   statCard: {
-    border: '1px solid rgba(248,250,252,.10)',
-    background: 'rgba(11,15,26,.72)',
-    backdropFilter: 'blur(10px)',
-    borderRadius: 16,
-    padding: '16px 18px',
-    boxShadow: '0 8px 24px rgba(0,0,0,.22)',
-  },
+  background: 'rgba(20,25,40,.70)',
+  backdropFilter: 'blur(18px)',
+  WebkitBackdropFilter: 'blur(18px)',
+  border: '1px solid rgba(255,255,255,.08)',
+  borderRadius: 20,
+  padding: 22,
+  boxShadow:
+    '0 15px 40px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05)',
+  transition: 'all .25s ease',
+  cursor: 'pointer',
+},
   statLabel: {
     fontSize: 11,
     color: 'rgba(248,250,252,.5)',
@@ -77,13 +84,13 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: 6,
   },
   tableCard: {
-    border: '1px solid rgba(248,250,252,.10)',
-    background: 'rgba(11,15,26,.72)',
-    backdropFilter: 'blur(10px)',
-    borderRadius: 16,
-    overflow: 'hidden',
-    boxShadow: '0 8px 24px rgba(0,0,0,.22)',
-  },
+  background:'rgba(20,25,40,.72)',
+  backdropFilter:'blur(20px)',
+  border:'1px solid rgba(255,255,255,.08)',
+  borderRadius:22,
+  overflow:'hidden',
+  boxShadow:'0 20px 50px rgba(0,0,0,.35)',
+},
   tableHeader: {
     padding: '14px 18px',
     borderBottom: '1px solid rgba(248,250,252,.08)',
@@ -231,7 +238,15 @@ export default function DashboardPage() {
       {/* Top row */}
       <div style={styles.topRow}>
         <div>
-          <h1 style={styles.heading}>Dashboard</h1>
+          <h1
+style={{
+fontSize:34,
+fontWeight:800,
+margin:0,
+}}
+>
+Here's what's happening today., {user?.name}
+</h1>
           <p style={styles.subtext}>Welcome back, {user?.name}</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -284,9 +299,28 @@ export default function DashboardPage() {
       {/* Stat cards */}
       <div style={styles.statsGrid}>
         {statCards.map(c => (
-          <div key={c.label} style={styles.statCard}>
+          <div
+    key={c.label}
+    style={styles.statCard}
+    onMouseEnter={(e)=>{
+        e.currentTarget.style.transform='translateY(-6px)';
+        e.currentTarget.style.boxShadow='0 25px 50px rgba(0,0,0,.45)';
+    }}
+    onMouseLeave={(e)=>{
+        e.currentTarget.style.transform='translateY(0)';
+        e.currentTarget.style.boxShadow='0 15px 40px rgba(0,0,0,.35)';
+    }}
+>
             <div style={styles.statLabel}>{c.label}</div>
-            <div style={{ ...styles.statValue, color: c.color }}>{c.value}</div>
+            <div
+style={{
+    fontSize:34,
+    fontWeight:800,
+    background:`linear-gradient(90deg,${c.color},#A78BFA)`,
+    WebkitBackgroundClip:'text',
+    color:'transparent'
+}}
+>{c.value}</div>
             <div style={styles.statSub}>{c.sub}</div>
           </div>
         ))}
@@ -332,19 +366,19 @@ export default function DashboardPage() {
 
                   {/* Status */}
                   <td style={styles.td}>
-                    <span style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: '4px 10px',
-                      borderRadius: 999,
-                      background: 'rgba(255,255,255,.06)',
-                      color: statusColors[r.current_status ?? 'offline'] || '#94A3B8',
-                      border: `1px solid ${statusColors[r.current_status ?? 'offline'] || '#94A3B8'}20`,
-                      fontSize: 12,
-                      fontWeight: 600,
-                      minWidth: 96,
-                    }}>
+                    <span
+style={{
+display:'inline-flex',
+alignItems:'center',
+gap:8,
+padding:'6px 14px',
+borderRadius:999,
+fontWeight:600,
+background:'rgba(255,255,255,.06)',
+border:`1px solid ${statusColors[r.current_status]}30`,
+color:statusColors[r.current_status],
+}}
+>
                       {statusLabels[r.current_status] || 'Offline'}
                     </span>
                   </td>
@@ -362,9 +396,9 @@ export default function DashboardPage() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <div style={{
                         flex: 1,
-                        height: 4,
+                        height:8,
+                        borderRadius:999,
                         background: 'rgba(248,250,252,.1)',
-                        borderRadius: 2,
                         maxWidth: 80,
                         overflow: 'hidden',
                       }}>
@@ -372,10 +406,10 @@ export default function DashboardPage() {
                           height: '100%',
                           borderRadius: 2,
                           width: `${r.avg_activity_pct == null ? 0 : r.avg_activity_pct}%`,
-                          background: r.avg_activity_pct == null
-                            ? 'rgba(248,250,252,.12)'
-                            : (r.avg_activity_pct < 30 ? '#F8D000' : '#22C55E'),
-                          transition: 'width .4s ease',
+                          background:
+r.avg_activity_pct < 30
+? 'linear-gradient(90deg,#F59E0B,#FBBF24)'
+: 'linear-gradient(90deg,#22C55E,#06B6D4)'
                         }} />
                       </div>
                       <span

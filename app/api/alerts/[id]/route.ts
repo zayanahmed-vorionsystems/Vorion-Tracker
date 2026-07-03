@@ -3,7 +3,9 @@ import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const { params } = context;
+  const resolvedParams = await params;
   const user = requireAuth(req);
   if ('status' in user) return user;
 
@@ -18,14 +20,14 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
       updated = await sql`
         UPDATE alerts
         SET is_read = true
-        WHERE id = ${params.id} AND employee_id = ${user.sub}
+        WHERE id = ${resolvedParams.id} AND employee_id = ${user.sub}
         RETURNING id, employee_id, alert_type, title, description, severity, status, metadata, is_read, created_at, sent_at
       `;
     } else {
       updated = await sql`
         UPDATE alerts
         SET is_read = true
-        WHERE id = ${params.id} AND to_user_id = ${user.sub}
+        WHERE id = ${resolvedParams.id} AND to_user_id = ${user.sub}
         RETURNING id, from_user_id, to_user_id, message, is_read, sent_at, created_at
       `;
     }

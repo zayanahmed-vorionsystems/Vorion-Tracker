@@ -23,9 +23,11 @@ const COLORS = {
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: '100vh',
-    background:
-      'radial-gradient(1200px 600px at 20% 0%, rgba(0,80,176,.18), transparent 60%), radial-gradient(900px 500px at 80% 20%, rgba(248,208,0,.10), transparent 55%), ' + COLORS.bg,
-    color: COLORS.text,
+    background: `
+linear-gradient(180deg,#020617,#0F172A),
+radial-gradient(circle at top left,#2563EB30 0%,transparent 35%),
+radial-gradient(circle at bottom right,#9333EA20 0%,transparent 40%)
+`,
     fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif',
     padding: '28px 32px',
   },
@@ -36,20 +38,23 @@ const styles: Record<string, React.CSSProperties> = {
     color: COLORS.text,
     letterSpacing: '-0.01em',
   },
-  cardHeader: {
-    fontSize: 14,
-    fontWeight: 600,
-    marginBottom: 18,
-    color: COLORS.text,
-    letterSpacing: '0.01em',
-  },
-  card: {
-    border: `1px solid ${COLORS.cardBorder}`,
-    background: COLORS.card,
-    borderRadius: 18,
-    padding: '20px 22px',
-    boxShadow: '0 10px 30px rgba(0,0,0,.35)',
-  },
+  cardHeader:{
+fontSize:15,
+fontWeight:700,
+marginBottom:20,
+color:"#F8FAFC",
+letterSpacing:'.02em',
+},
+  card:{
+background:'rgba(20,25,40,.72)',
+backdropFilter:'blur(20px)',
+WebkitBackdropFilter:'blur(20px)',
+border:'1px solid rgba(255,255,255,.08)',
+borderRadius:22,
+padding:'24px',
+boxShadow:'0 20px 50px rgba(0,0,0,.35)',
+transition:'all .25s ease',
+},
   grid: {
     display: 'grid',
     gridTemplateColumns: '1fr 1fr',
@@ -103,16 +108,61 @@ const styles: Record<string, React.CSSProperties> = {
 
 const axisTickStyle = { fontSize: 12, fill: COLORS.textMuted, fontWeight: 500 };
 
-const tooltipStyle = {
-  background: COLORS.tooltipBg,
-  border: `1px solid ${COLORS.cardBorder}`,
-  borderRadius: 10,
-  color: COLORS.text,
-  fontSize: 12,
-  padding: '8px 12px',
-  boxShadow: '0 8px 20px rgba(0,0,0,.4)',
+const tooltipStyle={
+background:'rgba(15,23,42,.95)',
+border:'1px solid rgba(255,255,255,.08)',
+borderRadius:14,
+backdropFilter:'blur(12px)',
+color:'#F8FAFC',
+padding:'10px 14px',
+boxShadow:'0 15px 35px rgba(0,0,0,.45)',
 };
+function SummaryCard({
+title,
+value,
+}:{
+title:string;
+value:any;
+}){
 
+return(
+<div
+style={{
+background:'rgba(20,25,40,.72)',
+backdropFilter:'blur(20px)',
+border:'1px solid rgba(255,255,255,.08)',
+borderRadius:20,
+padding:'20px',
+boxShadow:'0 15px 35px rgba(0,0,0,.35)',
+}}
+>
+
+<div
+style={{
+fontSize:12,
+color:'#94A3B8',
+textTransform:'uppercase',
+}}
+>
+{title}
+</div>
+
+<div
+style={{
+marginTop:10,
+fontSize:30,
+fontWeight:800,
+background:'linear-gradient(90deg,#3B82F6,#A78BFA)',
+WebkitBackgroundClip:'text',
+color:'transparent',
+}}
+>
+{value}
+</div>
+
+</div>
+)
+}
 export default function ReportsPage() {
   const { token } = useAuthStore();
   const [daily,  setDaily]  = useState<any[]>([]);
@@ -134,32 +184,105 @@ export default function ReportsPage() {
       .catch(() => setWeekly([]));
   }, [token]);
 
-  const chartDaily = daily
-    .sort((a,b)=>(b.total_seconds||0)-(a.total_seconds||0))
-    .slice(0,10)
-    .map(r=>({ name: r.name.split(' ')[0], hours: +(r.total_seconds/3600).toFixed(1), activity: r.avg_activity_pct||0 }));
-
+ const chartDaily = daily
+  .sort((a, b) => (b.total_seconds || 0) - (a.total_seconds || 0))
+  .slice(0, 10)
+  .map(r => ({
+    name: r.name.split(' ')[0],
+    hours: +(r.total_seconds / 3600).toFixed(1),
+    activity: Number(r.avg_activity_pct) || 0,
+  }));
   const chartWeekly = weekly.map(w=>({
     day: new Date(w.day).toLocaleDateString('en',{weekday:'short'}),
     hours: +(w.total_seconds/3600).toFixed(1),
     users: w.active_users,
   }));
-
+const avgActivity =
+  chartDaily.length > 0
+    ? Math.round(
+        chartDaily.reduce(
+          (sum, item) => sum + Number(item.activity || 0),
+          0
+        ) / chartDaily.length
+      )
+    : 0;
   const hasDaily = chartDaily.length > 0;
   const hasWeekly = chartWeekly.length > 0;
 
   return (
     <div style={styles.page}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 style={styles.heading}>Reports &amp; Analytics</h1>
-        <Link href="/reports/security" style={{ color: '#F8D000', textDecoration: 'none', fontSize: 13, fontWeight: 600 }}>
+        <h1
+style={{
+    fontSize:34,
+    fontWeight:800,
+    margin:0,
+    color:"#F8FAFC",
+}}
+>
+📊 Reports & Analytics
+</h1>
+        <Link
+href="/reports/security"
+style={{
+padding:'10px 18px',
+borderRadius:14,
+background:'rgba(255,255,255,.05)',
+border:'1px solid rgba(255,255,255,.08)',
+backdropFilter:'blur(12px)',
+color:'#F8FAFC',
+fontWeight:600,
+fontSize:13,
+textDecoration:'none',
+transition:'all .2s ease',
+}}
+>
   Security Report
 </Link>
       </div>
+<div
+style={{
+display:'grid',
+gridTemplateColumns:'repeat(4,1fr)',
+gap:18,
+marginBottom:22,
+}}
+>
 
+<SummaryCard
+title="Employees"
+value={daily.length}
+/>
+
+<SummaryCard
+title="Hours"
+value={chartDaily.reduce((a,b)=>a+b.hours,0).toFixed(1)}
+/>
+
+<SummaryCard
+title="Avg Activity"
+value={`${avgActivity}%`}
+/>
+
+<SummaryCard
+title="Weekly Days"
+value={weekly.length}
+/>
+
+</div>
       <div style={styles.grid}>
         {/* Hours today bar chart */}
-        <div style={styles.card}>
+        <div
+style={styles.card}
+onMouseEnter={(e)=>{
+e.currentTarget.style.transform='translateY(-6px)';
+e.currentTarget.style.boxShadow='0 28px 60px rgba(0,0,0,.45)';
+}}
+onMouseLeave={(e)=>{
+e.currentTarget.style.transform='translateY(0)';
+e.currentTarget.style.boxShadow='0 20px 50px rgba(0,0,0,.35)';
+}}
+>
           <div style={styles.cardHeader}>Hours worked today</div>
           {hasDaily ? (
             <ResponsiveContainer width="100%" height={200}>
@@ -168,11 +291,17 @@ export default function ReportsPage() {
                 <XAxis dataKey="name" tick={axisTickStyle} axisLine={false} tickLine={false}/>
                 <YAxis tick={axisTickStyle} axisLine={false} tickLine={false}/>
                 <Tooltip formatter={(v:any)=>`${v}h`} contentStyle={tooltipStyle} cursor={{ fill: 'rgba(255,255,255,.04)' }}/>
-                <Bar dataKey="hours" fill={COLORS.blue} radius={[6,6,0,0]} maxBarSize={48}/>
+                <Bar dataKey="hours" fill="url(#hoursGradient)" radius={[6,6,0,0]} maxBarSize={48}/>
               </BarChart>
+              <defs>
+<linearGradient id="hoursGradient" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stopColor="#3B82F6"/>
+<stop offset="100%" stopColor="#06B6D4"/>
+</linearGradient>
+</defs>
             </ResponsiveContainer>
           ) : (
-            <div style={styles.emptyState}>No activity recorded yet today</div>
+            <div style={styles.emptyState}>📊 No activity recorded yet today</div>
           )}
         </div>
 
@@ -186,8 +315,14 @@ export default function ReportsPage() {
                 <XAxis dataKey="name" tick={axisTickStyle} axisLine={false} tickLine={false}/>
                 <YAxis tick={axisTickStyle} axisLine={false} tickLine={false} domain={[0,100]}/>
                 <Tooltip formatter={(v:any)=>`${v}%`} contentStyle={tooltipStyle} cursor={{ fill: 'rgba(255,255,255,.04)' }}/>
-                <Bar dataKey="activity" fill={COLORS.blueLight} radius={[6,6,0,0]} maxBarSize={48}/>
+                <Bar dataKey="activity" fill="url(#activityGradient)" radius={[6,6,0,0]} maxBarSize={48}/>
               </BarChart>
+              <defs>
+<linearGradient id="activityGradient" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stopColor="#8B5CF6"/>
+<stop offset="100%" stopColor="#EC4899"/>
+</linearGradient>
+</defs>
             </ResponsiveContainer>
           ) : (
             <div style={styles.emptyState}>No activity recorded yet today</div>
@@ -206,11 +341,24 @@ export default function ReportsPage() {
                 <XAxis dataKey="day" tick={axisTickStyle} axisLine={false} tickLine={false}/>
                 <YAxis tick={axisTickStyle} axisLine={false} tickLine={false}/>
                 <Tooltip contentStyle={tooltipStyle} cursor={{ stroke: 'rgba(255,255,255,.15)' }}/>
-                <Line type="monotone" dataKey="hours" stroke={COLORS.blue} strokeWidth={2.5} dot={{ fill: COLORS.blue, r: 4 }} activeDot={{ r: 6 }}/>
-                <Line type="monotone" dataKey="users" stroke={COLORS.purple} strokeWidth={2.5} dot={{ fill: COLORS.purple, r: 4 }} activeDot={{ r: 6 }}/>
+                <Line type="monotone" dataKey="hours" stroke={COLORS.blue} strokeWidth={4} dot={{
+fill:COLORS.blue,
+r:6,
+stroke:"#fff",
+strokeWidth:2
+}} activeDot={{ r: 6 }}/>
+                <Line type="monotone" dataKey="users" stroke={COLORS.purple} strokeWidth={4} dot={{
+fill:COLORS.blue,
+r:6,
+stroke:"#fff",
+strokeWidth:2
+}} activeDot={{ r: 6 }}/>
               </LineChart>
             </ResponsiveContainer>
-            <div style={{ display:'flex', gap:20, justifyContent:'center', marginTop:14 }}>
+            <div style={{ display:'flex',
+gap:28,
+marginTop:20,
+justifyContent:'center', }}>
               <span style={{ fontSize:12, color: COLORS.textMuted, display:'flex', alignItems:'center', gap:6 }}>
                 <span style={{ width:10, height:10, borderRadius:'50%', background: COLORS.blue, display:'inline-block' }}/> Hours
               </span>
@@ -220,7 +368,7 @@ export default function ReportsPage() {
             </div>
           </>
         ) : (
-          <div style={styles.emptyState}>No weekly data yet — check back after a few days of activity</div>
+          <div style={styles.emptyState}>📈 Weekly analytics will appear after data is collected. — check back after a few days of activity</div>
         )}
       </div>
     </div>

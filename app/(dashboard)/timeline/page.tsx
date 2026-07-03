@@ -32,7 +32,15 @@ export default function TimelinePage() {
   const [rows,    setRows]    = useState<any[]>([]);
   const [date,    setDate]    = useState(new Date().toISOString().slice(0,10));
   const [loading, setLoading] = useState(true);
-
+const summaryCard = {
+  background:'rgba(20,25,40,.72)',
+  backdropFilter:'blur(20px)',
+  border:'1px solid rgba(255,255,255,.08)',
+  borderRadius:20,
+  padding:'20px',
+  color:'#F8FAFC',
+  boxShadow:'0 15px 35px rgba(0,0,0,.35)',
+};
   useEffect(() => {
     if (!token) return;
     setLoading(true);
@@ -47,11 +55,33 @@ export default function TimelinePage() {
   return (
     <div>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:24, flexWrap:'wrap', gap:14 }}>
-        <h1 style={{ fontSize:24, fontWeight:700, color: COLORS.text, letterSpacing:'-0.01em', margin:0 }}>Timeline</h1>
+        <h1
+style={{
+    fontSize:34,
+    fontWeight:800,
+    margin:0,
+    color:"#F8FAFC",
+}}
+>
+📈 Employee Timeline
+</h1>
         <div style={{ display:'flex', gap:16, alignItems:'center', flexWrap:'wrap' }}>
           <div style={{ display:'flex', gap:14 }}>
             {LEGEND.map(l=>(
-              <span key={l.label} style={{ display:'flex', alignItems:'center', gap:6, fontSize:12, color: COLORS.textMuted, fontWeight:500 }}>
+              <span
+style={{
+display:'flex',
+alignItems:'center',
+gap:8,
+padding:'6px 10px',
+borderRadius:999,
+background:'rgba(255,255,255,.04)',
+border:'1px solid rgba(255,255,255,.05)',
+fontSize:12,
+fontWeight:600,
+color:'#CBD5E1',
+}}
+>
                 <span style={{ width:10, height:10, background:l.color, borderRadius:3, display:'inline-block' }}/>
                 {l.label}
               </span>
@@ -59,25 +89,37 @@ export default function TimelinePage() {
           </div>
           <input type="date" value={date} onChange={e=>setDate(e.target.value)}
             style={{
-              padding:'8px 12px', borderRadius:10,
-              border:`1px solid ${COLORS.cardBorder}`,
-              fontSize:13, background: COLORS.inputBg,
-              color: COLORS.text, colorScheme: 'dark',
-              outline:'none',
-            }}/>
+    padding:'10px 14px',
+    borderRadius:14,
+    border:'1px solid rgba(255,255,255,.08)',
+    background:'rgba(255,255,255,.05)',
+    backdropFilter:'blur(10px)',
+    color:'#F8FAFC',
+    fontSize:13,
+    transition:'all .2s ease',
+    outline:'none',
+}}/>
         </div>
       </div>
 
       <div style={{
-        background: COLORS.card,
-        border:`1px solid ${COLORS.cardBorder}`,
-        borderRadius:18, padding:'22px 24px',
-        boxShadow:'0 10px 30px rgba(0,0,0,.35)',
+        background:'rgba(20,25,40,.72)',
+backdropFilter:'blur(20px)',
+WebkitBackdropFilter:'blur(20px)',
+border:'1px solid rgba(255,255,255,.08)',
+borderRadius:22,
+padding:'28px',
+boxShadow:'0 20px 50px rgba(0,0,0,.35)',
       }}>
         {/* Hour axis */}
         <div style={{ display:'flex', paddingLeft:128, marginBottom:14 }}>
           {HOURS.map(h=>(
-            <div key={h} style={{ flex:1, fontSize:11, color: COLORS.textFaint, textAlign:'center', fontWeight:500 }}>{h}</div>
+            <div key={h} style={{ fontSize:12,
+fontWeight:600,
+color:'rgba(255,255,255,.45)',
+letterSpacing:'.05em',
+textTransform:'uppercase',
+textAlign:'center', }}>{h}</div>
           ))}
         </div>
 
@@ -87,28 +129,63 @@ export default function TimelinePage() {
           <div style={{ padding:48, textAlign:'center', color: COLORS.textMuted, fontSize:13 }}>No data for this date</div>
         ) : (
           rows.map(r=>(
-            <div key={r.id} style={{ display:'flex', alignItems:'center', gap:14, marginBottom:12 }}>
+            <div
+key={r.id}
+style={{
+display:'flex',
+alignItems:'center',
+gap:16,
+marginBottom:14,
+padding:'10px 12px',
+borderRadius:14,
+transition:'all .25s ease',
+}}
+onMouseEnter={(e)=>{
+    e.currentTarget.style.background='rgba(255,255,255,.04)';
+    e.currentTarget.style.transform='translateX(6px)';
+}}
+onMouseLeave={(e)=>{
+    e.currentTarget.style.background='transparent';
+    e.currentTarget.style.transform='translateX(0)';
+}}
+>
               <div style={{
-                width:118, fontSize:13, fontWeight:500, textAlign:'right', color: COLORS.text,
+                width:150,
+fontSize:14,
+fontWeight:700,
+color:'#F8FAFC', textAlign:'right', 
                 overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flexShrink:0,
               }}>
                 {r.name}
               </div>
-              <div style={{ flex:1, height:26, background: COLORS.track, borderRadius:6, position:'relative', overflow:'hidden' }}>
+              <div style={{ height:32,
+background:'rgba(255,255,255,.06)',
+borderRadius:999,
+overflow:'hidden',
+border:'1px solid rgba(255,255,255,.05)', }}>
                 {r.total_seconds > 0 ? (
                   <div style={{
                     position:'absolute', top:0, left:0, height:'100%',
                     width:`${pct(r.total_seconds)}%`,
-                    background: 'linear-gradient(90deg, #3B82F6, #60A5FA)',
+                    background:'linear-gradient(90deg,#2563EB,#06B6D4,#22C55E)',
+boxShadow:'0 0 20px rgba(37,99,235,.45)',
                     borderRadius:6,
                   }}/>
                 ) : (
                   <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', paddingLeft:10, fontSize:12, color: COLORS.textFaint }}>
-                    No activity
+                   😴 No Activity
                   </div>
                 )}
               </div>
-              <div style={{ width:52, fontSize:12, color: COLORS.textMuted, flexShrink:0, fontWeight:500 }}>
+              <div
+style={{
+width:70,
+fontSize:13,
+fontWeight:600,
+textAlign:'right',
+color:'#CBD5E1',
+}}
+>
                 {fmt(r.total_seconds)}
               </div>
             </div>

@@ -63,14 +63,64 @@ const platforms = [
 
 // Shared style tokens
 const card: React.CSSProperties = {
-  border: '1px solid rgba(248,250,252,.10)',
-  background: 'rgba(11,15,26,.72)',
-  backdropFilter: 'blur(10px)',
-  borderRadius: 16,
-  overflow: 'hidden',
-  boxShadow: '0 8px 24px rgba(0,0,0,.22)',
+  background:'rgba(20,25,40,.72)',
+  backdropFilter:'blur(20px)',
+  WebkitBackdropFilter:'blur(20px)',
+  border:'1px solid rgba(255,255,255,.08)',
+  borderRadius:22,
+  overflow:'hidden',
+  boxShadow:'0 20px 50px rgba(0,0,0,.35)',
+  transition:'all .25s ease',
 };
+function SummaryCard({
+title,
+value,
+}:{
+title:string;
+value:string;
+}){
 
+return(
+
+<div
+style={{
+background:'rgba(20,25,40,.72)',
+backdropFilter:'blur(20px)',
+border:'1px solid rgba(255,255,255,.08)',
+borderRadius:20,
+padding:'20px',
+boxShadow:'0 15px 35px rgba(0,0,0,.35)',
+}}
+>
+
+<div
+style={{
+fontSize:12,
+color:'#94A3B8',
+textTransform:'uppercase',
+}}
+>
+{title}
+</div>
+
+<div
+style={{
+marginTop:10,
+fontSize:26,
+fontWeight:800,
+background:'linear-gradient(90deg,#3B82F6,#8B5CF6)',
+WebkitBackgroundClip:'text',
+color:'transparent',
+}}
+>
+{value}
+</div>
+
+</div>
+
+)
+
+}
 export default function DownloadPage() {
   const { token } = useAuthStore();
   const [copied, setCopied] = useState<string | null>(null);
@@ -83,18 +133,70 @@ export default function DownloadPage() {
   return (
     <div>
       <div style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: '0 0 6px', color: '#F8FAFC' }}>Download Vorion Agent</h1>
-        <p style={{ fontSize: 13, color: 'rgba(248,250,252,.45)', margin: 0, maxWidth: 560 }}>
-          Install the agent on every employee's computer. It runs silently in the background, captures screenshots, tracks active apps, and syncs everything to your dashboard.
-        </p>
+      <h1
+style={{
+    fontSize:34,
+    fontWeight:800,
+    margin:'0 0 8px',
+    color:'#F8FAFC',
+}}
+>
+💻 Download Vorion Agent
+</h1>
+        <p
+style={{
+fontSize:14,
+lineHeight:1.7,
+color:'#94A3B8',
+maxWidth:700,
+margin:0,
+}}
+>
+Install the monitoring agent on employee devices. The agent automatically tracks activity, captures screenshots, records application usage, and securely synchronizes everything with your dashboard.
+</p>
       </div>
+<div
+style={{
+display:'grid',
+gridTemplateColumns:'repeat(3,1fr)',
+gap:18,
+marginBottom:24,
+}}
+>
 
+<SummaryCard
+title="Platforms"
+value="3"
+/>
+
+<SummaryCard
+title="Supported OS"
+value="Win • macOS • Linux"
+/>
+
+<SummaryCard
+title="Auto Updates"
+value="Enabled"
+/>
+
+</div>
       
 
       {/* Platform cards */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {platforms.map(p => (
-          <div key={p.id} style={card}>
+          <div
+key={p.id}
+style={card}
+onMouseEnter={(e)=>{
+    e.currentTarget.style.transform='translateY(-6px)';
+    e.currentTarget.style.boxShadow='0 30px 60px rgba(0,0,0,.45)';
+}}
+onMouseLeave={(e)=>{
+    e.currentTarget.style.transform='translateY(0)';
+    e.currentTarget.style.boxShadow='0 20px 50px rgba(0,0,0,.35)';
+}}
+>
             {/* Card header */}
             <div style={{
               display: 'flex', alignItems: 'center', gap: 12,
@@ -103,9 +205,9 @@ export default function DownloadPage() {
               <span style={{ fontSize: 24 }}>{p.icon}</span>
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 15, fontWeight: 600, color: '#F8FAFC' }}>{p.name}</span>
+                  <span style={{ fontSize: 15, fontWeight:700, color: '#F8FAFC' }}>{p.name}</span>
                   <span style={{
-                    fontSize: 10, padding: '2px 8px', borderRadius: 99, fontWeight: 600,
+                    fontSize:11, padding:'4px 10px', borderRadius: 99, fontWeight:700,
                     background: p.badgeColor + '18', color: p.badgeColor,
                     border: `1px solid ${p.badgeColor}30`,
                   }}>{p.badge}</span>
@@ -114,21 +216,25 @@ export default function DownloadPage() {
               </div>
               {p.url ? (
                 <a href={p.url} target="_blank" rel="noopener noreferrer" style={{
-                  padding: '9px 20px', borderRadius: 12,
-                  background: 'linear-gradient(180deg, rgba(0,80,176,.55), rgba(0,80,176,.35))',
+                  padding:'12px 22px', borderRadius:14,
+                  background:'linear-gradient(90deg,#2563EB,#3B82F6)',
                   border: '1px solid rgba(0,80,176,.55)',
-                  color: '#F8FAFC', fontSize: 13, fontWeight: 600, textDecoration: 'none',
+                  color: '#F8FAFC', fontSize: 13, fontWeight:700, textDecoration: 'none',
                   display: 'inline-block', whiteSpace: 'nowrap',
+                  transition:'all .2s ease',
+boxShadow:'0 10px 25px rgba(37,99,235,.35)',
                 }}>
                   ⬇ Download
                 </a>
               ) : (
                 <span style={{
-                  padding: '9px 20px', borderRadius: 12,
+                  padding:'12px 22px', borderRadius:14,
                   background: 'rgba(248,250,252,.08)',
                   border: '1px solid rgba(248,250,252,.12)',
-                  color: 'rgba(248,250,252,.45)', fontSize: 13, fontWeight: 600,
+                  color: 'rgba(248,250,252,.45)', fontSize: 13, fontWeight:700,
                   display: 'inline-block', whiteSpace: 'nowrap',
+                  transition:'all .2s ease',
+boxShadow:'0 10px 25px rgba(37,99,235,.35)',
                 }}>
                   Download unavailable
                 </span>
@@ -138,34 +244,34 @@ export default function DownloadPage() {
             {/* Steps + Script */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
               <div style={{ padding: '16px 20px', borderRight: '1px solid rgba(248,250,252,.06)' }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(248,250,252,.4)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                <div style={{ fontSize: 11, fontWeight:700, color: 'rgba(248,250,252,.4)', marginBottom: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                   Installation steps
                 </div>
                 <ol style={{ paddingLeft: 16, margin: 0 }}>
                   {p.steps.map((s, i) => (
-                    <li key={i} style={{ fontSize: 12, color: 'rgba(248,250,252,.6)', marginBottom: 7, lineHeight: 1.6 }}>{s}</li>
+                    <li key={i} style={{ fontSize: 12, color:'#CBD5E1', marginBottom: 7, lineHeight: 1.6 }}>{s}</li>
                   ))}
                 </ol>
               </div>
 
               <div style={{ padding: '16px 20px' }}>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(248,250,252,.4)', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                <div style={{ fontSize: 11, fontWeight:700, color: 'rgba(248,250,252,.4)', marginBottom: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                   <span>Silent install script</span>
                   <button onClick={() => copy(p.script, p.id)} style={{
                     fontSize: 11, padding: '3px 10px', borderRadius: 8,
                     border: '1px solid rgba(248,250,252,.12)',
                     background: copied === p.id ? 'rgba(34,197,94,.1)' : 'rgba(248,250,252,.04)',
                     color: copied === p.id ? '#4ADE80' : 'rgba(248,250,252,.5)',
-                    cursor: 'pointer', fontWeight: 600,
+                    cursor: 'pointer', fontWeight:700,
                   }}>
                     {copied === p.id ? '✓ Copied' : 'Copy'}
                   </button>
                 </div>
                 <pre style={{
-                  margin: 0, padding: '12px 14px',
-                  background: 'rgba(0,0,0,.4)', color: '#94A3B8',
+                  margin: 0, padding:'18px',
+                  background:'#020617', color: '#94A3B8',
                   border: '1px solid rgba(248,250,252,.06)',
-                  borderRadius: 10, fontSize: 11, overflow: 'auto',
+                  borderRadius:14, fontSize: 11, overflow: 'auto',
                   lineHeight: 1.7, whiteSpace: 'pre-wrap',
                 }}>
                   <code>{p.script}</code>

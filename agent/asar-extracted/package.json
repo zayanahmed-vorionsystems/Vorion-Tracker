@@ -1,0 +1,15 @@
+{
+  "name": "worktrack-agent",
+  "version": "1.0.0",
+  "description": "WorkTrack silent background agent — captures screenshots and tracks time",
+  "main": "dist/main.js",
+  "dependencies": {
+    "active-win": "^8.1.0",
+    "axios": "^1.6.8",
+    "electron-store": "^8.1.0",
+    "form-data": "^4.0.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "socket.io-client": "^4.2.0"
+  }
+}

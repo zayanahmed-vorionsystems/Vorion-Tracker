@@ -27,16 +27,28 @@ export async function GET(req: NextRequest) {
         attendance_summary AS (
           SELECT
             a.employee_id,
+            MAX(a.check_out) AS last_check_out,
             SUM(
               CASE
-                WHEN a.check_out IS NOT NULL THEN GREATEST(0, COALESCE(a.total_minutes, 0) - COALESCE(b.break_minutes, 0))
-                WHEN a.status = 'on_break' THEN GREATEST(0, COALESCE(a.total_minutes, 0))
-                ELSE GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (NOW() - a.check_in)) / 60)::int - COALESCE(b.break_minutes, 0))
+                WHEN a.status IN ('checked_out', 'on_break') THEN
+                  GREATEST(0, COALESCE(a.total_minutes, 0) - COALESCE(b.break_minutes, 0))
+                WHEN es.last_activity IS NOT NULL AND es.last_activity < NOW() - INTERVAL '3 minutes' THEN
+                  GREATEST(
+                    0,
+                    FLOOR(EXTRACT(EPOCH FROM (es.last_activity - a.check_in)) / 60)::int
+                    - COALESCE(b.break_minutes, 0)
+                  )
+                ELSE
+                  GREATEST(
+                    0,
+                    FLOOR(EXTRACT(EPOCH FROM (NOW() - a.check_in)) / 60)::int
+                    - COALESCE(b.break_minutes, 0)
+                  )
               END
-            ) AS total_minutes,
-            MAX(a.check_out) AS last_check_out
+            ) AS total_minutes
           FROM attendance a
-          LEFT JOIN break_summary b ON b.attendance_id = a.id
+          LEFT JOIN break_summary   b  ON b.attendance_id = a.id
+          LEFT JOIN employee_status es ON es.employee_id  = a.employee_id
           WHERE DATE(a.check_in) = ${date}
           GROUP BY a.employee_id
         ),
@@ -73,7 +85,10 @@ export async function GET(req: NextRequest) {
             COALESCE(a.last_check_out, '1970-01-01'::timestamptz),
             COALESCE(es.last_activity, '1970-01-01'::timestamptz)
           )                                            AS last_active,
-          es.current_status,
+          CASE
+            WHEN es.last_activity IS NULL OR es.last_activity < NOW() - INTERVAL '3 minutes' THEN 'offline'
+            ELSE es.current_status
+          END                                          AS current_status,
           es.current_app
         FROM public.profiles p
         LEFT JOIN attendance_summary  a   ON a.employee_id   = p.id

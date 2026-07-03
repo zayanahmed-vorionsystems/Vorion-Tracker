@@ -9,6 +9,7 @@ import fs     from 'fs';
 import os     from 'os';
 import https  from 'https';
 import http   from 'http';
+import { setupLiveWatch, teardownLiveWatch } from './live-watch';
 import type { IncomingMessage } from 'http';
 import { syncProxyBlock, removeProxyBlock } from './websiteBlock';
 // ─── Config ────────────────────────────────────────────────────────────────
@@ -31,33 +32,38 @@ function get(key:string)        { return readStore()[key]; }
 function set(key:string,val:any){ writeStore({...readStore(),[key]:val}); }
 
 // ─── State ─────────────────────────────────────────────────────────────────
-const socket = io(SOCKET_SERVER_URL, { autoConnect:false, transports:['websocket'] });
-let tray:        Tray|null         = null;
+const socket = io(SOCKET_SERVER_URL, { autoConnect:false, transports:['websocket','polling'] });
+socket.on('connect', () => console.log('AGENT SOCKET CONNECTED:', socket.id));
+socket.on('connect_error', (e) => console.log('AGENT SOCKET CONNECT ERROR:', e.message));
+let tray:        Tray|null          = null;
 let mainWindow:  BrowserWindow|null = null;
-let token:       string            = get('token') || '';
-let userName:    string            = get('userName') || '';
-let employeeId:   string            = get('employeeId') || '';
-let sessionId:   string            = '';
-let agentId:     string            = get('agentId') || `agent-${Math.random().toString(36).slice(2,10)}`;
+let token:       string             = get('token') || '';
+let userName:    string             = get('userName') || '';
+let employeeId:  string             = get('employeeId') || '';
+let sessionId:   string             = '';
+let agentId:     string             = get('agentId') || `agent-${Math.random().toString(36).slice(2,10)}`;
 let status:      'offline'|'active'|'break'|'idle' = token ? 'active' : 'offline';
 let tracking     = false;
-let ssInterval:  NodeJS.Timeout|null = null;
-let idleInterval: NodeJS.Timeout|null = null;
-let heartbeatInterval: NodeJS.Timeout|null = null;
-let policyInterval: NodeJS.Timeout|null = null;
-let scanInterval: NodeJS.Timeout|null = null;
-let captureIntervalSec = parseInt(get('captureIntervalSec')||'2');
-let lastActiveApp = 'Unknown';
-let lastActivityPct = 100;
-let cachedPolicy: any = null;
-let cachedBlockedApps: any[] = [];
-let cachedBlockedWebsites: any[] = [];
+let ssInterval:         NodeJS.Timeout|null = null;
+let idleInterval:       NodeJS.Timeout|null = null;
+let heartbeatInterval:  NodeJS.Timeout|null = null;
+let policyInterval:     NodeJS.Timeout|null = null;
+let scanInterval:       NodeJS.Timeout|null = null;
 let policySyncInterval: NodeJS.Timeout|null = null;
+let captureIntervalSec = parseInt(get('captureIntervalSec')||'2');
+let lastActiveApp    = 'Unknown';
+let lastActivityPct  = 100;
+let cachedPolicy:         any   = null;
+let cachedBlockedApps:    any[] = [];
+let cachedBlockedWebsites:any[] = [];
 let policySyncInFlight = false;
-let lastKnownUrl = '';
 // tracks which blocked domains we've already reported recently, to avoid spamming events
 const recentlyReportedDomains = new Map<string, number>();
 set('agentId', agentId);
+
+// ─── Live streaming state (WebRTC) ──────────────────────────────────────────
+let streamWindow: BrowserWindow | null = null;
+const activeWatchers = new Set<string>();
 
 // ─── Single instance lock ───────────────────────────────────────────────────
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
@@ -69,10 +75,7 @@ app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
 // ─── HTTP helper ────────────────────────────────────────────────────────────
 class HttpError extends Error {
   status: number;
-  constructor(message:string, status:number) {
-    super(message);
-    this.status = status;
-  }
+  constructor(message:string, status:number) { super(message); this.status = status; }
 }
 
 function apiRequest(method:string, path:string, body?:any, isFormData=false): Promise<any> {
@@ -80,12 +83,10 @@ function apiRequest(method:string, path:string, body?:any, isFormData=false): Pr
     const url  = new URL(path, SERVER_URL);
     const mod  = url.protocol==='https:'?https:http;
     const data = body && !isFormData ? Buffer.from(JSON.stringify(body)) : body;
-
     const headers: Record<string,string> = {};
     if (token) headers['Authorization'] = `Bearer ${token}`;
     if (body && !isFormData) { headers['Content-Type']='application/json'; headers['Content-Length']=String(data.length); }
     if (isFormData && body?.getHeaders) Object.assign(headers, body.getHeaders());
-
     const req = (mod as any).request({ hostname:url.hostname, port:url.port||undefined, path:url.pathname+url.search, method, headers }, (res: IncomingMessage) => {
       let raw = '';
       res.on('data', (chunk: Buffer) => raw += chunk);
@@ -115,13 +116,9 @@ async function apiFormRequest(path:string, form:any) {
   const url = new URL(path, SERVER_URL);
   const headers: Record<string,string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
-
-  const res = await fetch(url.toString(), { method:'POST', headers, body: form });
+  const res  = await fetch(url.toString(), { method:'POST', headers, body: form });
   const body = await res.text();
-  if (!body) {
-    if (res.ok) return {};
-    throw new Error(`Request failed ${res.status}`);
-  }
+  if (!body) { if (res.ok) return {}; throw new Error(`Request failed ${res.status}`); }
   const parsed = JSON.parse(body);
   if (!res.ok) throw new Error(parsed?.error || `Request failed ${res.status}`);
   return parsed;
@@ -143,9 +140,10 @@ async function startSession() {
 }
 
 async function endSession() {
-  if (!token || !sessionId) return;
+  if (!token) return;
   try {
-    await sessionAction('checkout', { sessionId });
+    const payload = sessionId ? { sessionId } : {};
+    await sessionAction('checkout', payload);
   } catch (err:any) {
     console.error('Failed to end session:', err?.message || err);
   } finally {
@@ -169,13 +167,9 @@ async function uploadScreenshot(pngBuf: Buffer, activeApp:string, actPct:number,
   }
 }
 
-function getStoredAlerts(): any[] {
-  return get('alerts') || [];
-}
-
-function setStoredAlerts(alerts: any[]) {
-  set('alerts', alerts);
-}
+// ─── Alerts ────────────────────────────────────────────────────────────────
+function getStoredAlerts(): any[] { return get('alerts') || []; }
+function setStoredAlerts(alerts: any[]) { set('alerts', alerts); }
 
 function normalizeAlertRecord(raw: any) {
   return {
@@ -193,18 +187,12 @@ function normalizeAlertRecord(raw: any) {
 
 function mergeAlerts(localAlerts:any[], serverAlerts:any[]) {
   const map = new Map<string, any>();
-  serverAlerts.forEach((item:any) => {
-    const normalized = normalizeAlertRecord(item);
-    map.set(normalized.id, normalized);
-  });
+  serverAlerts.forEach((item:any) => { const n = normalizeAlertRecord(item); map.set(n.id, n); });
   localAlerts.forEach((item:any) => {
     if (!item?.id) return;
     const existing = map.get(item.id);
-    if (existing) {
-      existing.isRead = existing.isRead || Boolean(item.isRead);
-    } else {
-      map.set(item.id, { ...normalizeAlertRecord(item) });
-    }
+    if (existing) { existing.isRead = existing.isRead || Boolean(item.isRead); }
+    else { map.set(item.id, { ...normalizeAlertRecord(item) }); }
   });
   return Array.from(map.values()).sort((a,b) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime());
 }
@@ -226,12 +214,9 @@ async function persistAlert(raw: any) {
   const alert = normalizeAlertRecord(raw);
   const alerts = getStoredAlerts();
   const exists = alerts.find((item:any) => item.id === alert.id);
-  let nextAlerts;
-  if (exists) {
-    nextAlerts = alerts.map((item:any) => item.id === alert.id ? { ...item, ...alert } : item);
-  } else {
-    nextAlerts = [alert, ...alerts];
-  }
+  let nextAlerts = exists
+    ? alerts.map((item:any) => item.id === alert.id ? { ...item, ...alert } : item)
+    : [alert, ...alerts];
   nextAlerts = nextAlerts.sort((a:any,b:any) => new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime());
   setStoredAlerts(nextAlerts);
   return alert;
@@ -239,12 +224,11 @@ async function persistAlert(raw: any) {
 
 async function markAlertRead(id:string) {
   const existingAlerts = getStoredAlerts();
-  const updatedAlerts = existingAlerts.map((alert:any) => alert.id === id ? { ...alert, isRead:true } : alert);
+  const updatedAlerts  = existingAlerts.map((alert:any) => alert.id === id ? { ...alert, isRead:true } : alert);
   setStoredAlerts(updatedAlerts);
-
   if (!token) return updatedAlerts.find((alert:any) => alert.id === id) || null;
   try {
-    const updated = await apiRequest('PATCH', `/api/alerts/${id}/read`);
+    const updated    = await apiRequest('PATCH', `/api/alerts/${id}/read`);
     const normalized = normalizeAlertRecord(updated);
     const finalAlerts = updatedAlerts.map((alert:any) => alert.id === id ? { ...alert, ...normalized, isRead:true } : alert);
     setStoredAlerts(finalAlerts);
@@ -255,101 +239,10 @@ async function markAlertRead(id:string) {
   }
 }
 
-// ─── Hosts-file based website blocking ──────────────────────────────────────
-// Instead of killing the entire browser when a blocked site is detected,
-// we redirect the blocked domains to 127.0.0.1 in the OS hosts file.
-// The browser itself will then show "This site can't be reached" /
-// "refused to connect" for that domain — Chrome (and any other browser)
-// stays open and unaffected for every other site.
-const HOSTS_PATH =
-  process.platform === 'win32'
-    ? 'C:\\Windows\\System32\\drivers\\etc\\hosts'
-    : '/etc/hosts';
-const MARK_START = '# WORKTRACK-BLOCK-START';
-const MARK_END   = '# WORKTRACK-BLOCK-END';
-let lastHostsDomainsKey = '';
-
-function flushDnsCache() {
-  const { exec } = require('child_process');
-  if (process.platform === 'win32') {
-    exec('ipconfig /flushdns');
-  } else if (process.platform === 'darwin') {
-    exec('dscacheutil -flushcache; killall -HUP mDNSResponder');
-  }
-  // Linux DNS caching varies by distro; most browsers re-resolve on next request anyway.
-}
-
-function syncHostsFile() {
-  if (!cachedPolicy || !cachedPolicy.blockWebsites) {
-    removeHostsBlock();
-    return;
-  }
-
-  const domains = cachedBlockedWebsites
-    .filter((item: any) => item?.enabled)
-    .map((item: any) => (item.domain || '').toLowerCase().replace(/^www\./, ''))
-    .filter(Boolean);
-
-  const domainsKey = JSON.stringify(domains.slice().sort());
-  if (domainsKey === lastHostsDomainsKey) return; // nothing changed, skip disk write
-  lastHostsDomainsKey = domainsKey;
-
-  try {
-    let content = '';
-    try {
-      content = fs.readFileSync(HOSTS_PATH, 'utf8');
-    } catch (readErr: any) {
-      console.error('[SECURITY] Could not read hosts file:', readErr?.message || readErr);
-      return;
-    }
-
-    // strip any previous block we wrote
-    const startIdx = content.indexOf(MARK_START);
-    const endIdx = content.indexOf(MARK_END);
-    if (startIdx !== -1 && endIdx !== -1) {
-      content = content.slice(0, startIdx) + content.slice(endIdx + MARK_END.length);
-    }
-
-    if (domains.length) {
-      const lines = domains.flatMap((d: string) => [
-        `127.0.0.1 ${d}`,
-        `127.0.0.1 www.${d}`,
-      ]);
-      content = content.replace(/\s+$/, '') + `\n\n${MARK_START}\n${lines.join('\n')}\n${MARK_END}\n`;
-    } else {
-      content = content.replace(/\s+$/, '') + '\n';
-    }
-
-    fs.writeFileSync(HOSTS_PATH, content, 'utf8');
-    flushDnsCache();
-    console.log('[SECURITY] Hosts file synced, blocked domains:', domains.length);
-  } catch (err: any) {
-    console.error('[SECURITY] Failed to write hosts file (run agent as Administrator):', err?.message || err);
-  }
-}
-
-function removeHostsBlock() {
-  if (lastHostsDomainsKey === '[]') return; // already clean
-  try {
-    let content = fs.readFileSync(HOSTS_PATH, 'utf8');
-    const startIdx = content.indexOf(MARK_START);
-    const endIdx = content.indexOf(MARK_END);
-    if (startIdx !== -1 && endIdx !== -1) {
-      content = content.slice(0, startIdx) + content.slice(endIdx + MARK_END.length);
-      fs.writeFileSync(HOSTS_PATH, content.replace(/\s+$/, '') + '\n', 'utf8');
-      flushDnsCache();
-      console.log('[SECURITY] Hosts file block list cleared');
-    }
-    lastHostsDomainsKey = '[]';
-  } catch (err: any) {
-    console.error('[SECURITY] Failed to clean hosts file:', err?.message || err);
-  }
-}
-
+// ─── Policy sync ────────────────────────────────────────────────────────────
 async function syncPolicies() {
   if (!token) return;
   if (policySyncInFlight) return;
-
   policySyncInFlight = true;
   try {
     const [policyResponse, blockedAppsResponse, blockedWebsitesResponse] = await Promise.all([
@@ -358,29 +251,26 @@ async function syncPolicies() {
       apiRequest('GET', '/api/blocked/websites'),
     ]);
 
-    const nextPolicy = policyResponse ?? null;
-    const nextBlockedApps = Array.isArray(blockedAppsResponse) ? blockedAppsResponse : [];
+    const nextPolicy          = policyResponse ?? null;
+    const nextBlockedApps     = Array.isArray(blockedAppsResponse)     ? blockedAppsResponse     : [];
     const nextBlockedWebsites = Array.isArray(blockedWebsitesResponse) ? blockedWebsitesResponse : [];
 
-    const changed = JSON.stringify(cachedPolicy) !== JSON.stringify(nextPolicy) ||
-      JSON.stringify(cachedBlockedApps) !== JSON.stringify(nextBlockedApps) ||
+    const changed =
+      JSON.stringify(cachedPolicy)          !== JSON.stringify(nextPolicy) ||
+      JSON.stringify(cachedBlockedApps)     !== JSON.stringify(nextBlockedApps) ||
       JSON.stringify(cachedBlockedWebsites) !== JSON.stringify(nextBlockedWebsites);
-    syncProxyBlock(cachedPolicy, cachedBlockedWebsites);
-    cachedPolicy = nextPolicy;
-    cachedBlockedApps = nextBlockedApps;
+
+    // ✅ Pehle update karo, phir proxy sync karo (naye data ke sath)
+    cachedPolicy          = nextPolicy;
+    cachedBlockedApps     = nextBlockedApps;
     cachedBlockedWebsites = nextBlockedWebsites;
 
     console.log('[SECURITY] Policies downloaded');
     console.log('[SECURITY] Blocked apps:', cachedBlockedApps.length);
     console.log('[SECURITY] Blocked websites:', cachedBlockedWebsites.length);
+    console.log(changed ? 'Policy sync succeeded and updated in-memory policy data' : 'Policy sync succeeded');
 
-    if (changed) {
-      console.log('Policy sync succeeded and updated in-memory policy data');
-    } else {
-      console.log('Policy sync succeeded');
-    }
-
-    // Keep the hosts file in sync with the latest policy/blocked-website list
+    // ✅ Sirf ek baar, naye cache ke sath
     await syncProxyBlock(cachedPolicy, cachedBlockedWebsites);
   } catch (err:any) {
     console.error('[SECURITY] Policy sync failed:', err?.message || err);
@@ -389,17 +279,16 @@ async function syncPolicies() {
   }
 }
 
+async function enforcePolicies() {
+  if (!token) return;
+  try { await syncPolicies(); }
+  catch (err:any) { console.error('[SECURITY] enforcePolicies error:', err?.message || err); }
+}
+
+// ─── Security event reporting ───────────────────────────────────────────────
 async function submitSecurityEvent(eventType:string, value:string, actionTaken:string) {
   if (!token) return;
-
-  const payload = {
-    employeeId: employeeId || undefined,
-    computerName: os.hostname(),
-    eventType,
-    value,
-    actionTaken,
-  };
-
+  const payload = { employeeId: employeeId || undefined, computerName: os.hostname(), eventType, value, actionTaken };
   let lastError: any;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
@@ -408,47 +297,34 @@ async function submitSecurityEvent(eventType:string, value:string, actionTaken:s
       return;
     } catch (err:any) {
       lastError = err;
-      const status = typeof err?.status === 'number' ? err.status : 0;
-      const shouldRetry = status === 0 || (status >= 500 && status < 600);
+      const s = typeof err?.status === 'number' ? err.status : 0;
+      const shouldRetry = s === 0 || (s >= 500 && s < 600);
       if (!shouldRetry || attempt === 3) {
-        console.error('Failed to submit security event:', err?.message || err, { eventType, value, actionTaken, status });
+        console.error('Failed to submit security event:', err?.message || err);
         return;
       }
-      const retryDelay = attempt * 1000;
-      console.warn('Security event submission failed; retrying', { eventType, attempt, retryDelay, status, error: err?.message || err });
-      await new Promise((resolve) => setTimeout(resolve, retryDelay));
+      await new Promise((r) => setTimeout(r, attempt * 1000));
     }
   }
-
-  if (lastError) {
-    console.error('Security event submission failed:', lastError?.message || lastError);
-  }
+  if (lastError) console.error('Security event submission failed:', lastError?.message || lastError);
 }
 
 function normalizeProcessName(name:string) {
   return (name || '').trim().toLowerCase().replace(/\.exe$/i, '');
 }
 
-// ─── Website "violation" detection (reporting only — no longer kills the browser) ──
-// The hosts file is what actually blocks the site (see syncHostsFile above).
-// This scan just detects when a user *attempted* to view a blocked site (by
-// window title) so it can be logged/reported to the dashboard. It no longer
-// shows a dialog or terminates the browser process.
+// ─── Website scan (detection + reporting only — PAC proxy does the actual blocking) ──
 async function scanBlockedWebsites() {
   if (!token || !cachedPolicy || !cachedPolicy.blockWebsites || !cachedBlockedWebsites.length) return;
-
   try {
     const { default: activeWin } = await import('active-win');
-    const win = await activeWin();
+    const win       = await activeWin();
     const ownerName = (win?.owner?.name || '').toLowerCase();
-    const title = win?.title || '';
+    const title     = win?.title || '';
     console.log('[SECURITY] [DEBUG] owner.name=', JSON.stringify(win?.owner?.name), 'title=', JSON.stringify(title));
 
     const isBrowser = ['chrome', 'msedge', 'edge', 'firefox', 'brave'].some((b) => ownerName.includes(b));
-    if (!isBrowser || !title) {
-      console.log('[SECURITY] [DEBUG] Not recognized as browser, skipping');
-      return;
-    }
+    if (!isBrowser || !title) { console.log('[SECURITY] [DEBUG] Not recognized as browser, skipping'); return; }
 
     console.log('[SECURITY] Active browser window title:', title);
 
@@ -460,56 +336,39 @@ async function scanBlockedWebsites() {
     if (!blockedDomains.length) return;
 
     const lowerTitle = title.toLowerCase();
-
     const matchedDomain = blockedDomains.find((domain: string) => {
       const brand = domain.split('.')[0];
       return lowerTitle.includes(domain) || (brand.length > 2 && lowerTitle.includes(brand));
     });
 
-    if (!matchedDomain) {
-      console.log('[SECURITY] No violations found');
-      return;
-    }
+    if (!matchedDomain) { console.log('[SECURITY] No violations found'); return; }
 
     console.log('[SECURITY] 🚨 Blocked website attempt detected:', matchedDomain, '(title:', title, ')');
 
-    // Avoid spamming an event every 2s while the tab stays open — only report
-    // once per domain per 5-minute window.
-    const now = Date.now();
+    // Report once per domain per 5-minute window — avoid spamming
+    const now           = Date.now();
     const lastReportedAt = recentlyReportedDomains.get(matchedDomain) || 0;
     if (now - lastReportedAt > 5 * 60 * 1000) {
       recentlyReportedDomains.set(matchedDomain, now);
-      await submitSecurityEvent('blocked_website', matchedDomain, 'hosts_redirect');
+      await submitSecurityEvent('blocked_website', matchedDomain, 'proxy_blocked');
     }
   } catch (err: any) {
     console.error('[SECURITY] Blocked website scan error:', err?.message || err);
   }
 }
 
+// ─── App scan ───────────────────────────────────────────────────────────────
 async function scanBlockedApps() {
   if (!token || !cachedPolicy || !cachedBlockedApps.length) return;
-
   try {
     const { exec } = await import('child_process');
-
-    // ✅ WMIC use karo — tasklist se zyada reliable
     const output = await new Promise<string>((resolve, reject) => {
-      exec('wmic process get Name /FORMAT:CSV',
-        { maxBuffer: 1024 * 1024 * 10 }, // 10MB buffer
-        (error, stdout) => error ? reject(error) : resolve(stdout)
-      );
+      exec('wmic process get Name /FORMAT:CSV', { maxBuffer: 1024 * 1024 * 10 },
+        (error, stdout) => error ? reject(error) : resolve(stdout));
     });
-
-    const runningProcesses = output
-      .split(/\r?\n/)
-      .map((line: string) => line.trim())
-      .filter(Boolean)
-      .map((line: string) => {
-        // WMIC CSV format: Node,Name
-        const parts = line.split(',');
-        return parts[parts.length - 1]?.trim() || '';
-      })
-      .filter((name: string) => name && name !== 'Name'); // header skip
+    const runningProcesses = output.split(/\r?\n/).map((l:string) => l.trim()).filter(Boolean)
+      .map((l:string) => { const parts = l.split(','); return parts[parts.length - 1]?.trim() || ''; })
+      .filter((n:string) => n && n !== 'Name');
 
     const blockedNames = cachedBlockedApps
       .filter((item: any) => item?.enabled)
@@ -518,97 +377,142 @@ async function scanBlockedApps() {
 
     console.log(`[SECURITY] Running processes count: ${runningProcesses.length}`);
     console.log(`[SECURITY] Blocked process names: ${blockedNames.join(', ')}`);
-
     if (!blockedNames.length) return;
 
     let violationFound = false;
-
     for (const processName of runningProcesses) {
-      const normalizedProcess = normalizeProcessName(processName);
-      if (!normalizedProcess || !blockedNames.includes(normalizedProcess)) continue;
-
+      const np = normalizeProcessName(processName);
+      if (!np || !blockedNames.includes(np)) continue;
       violationFound = true;
       console.log(`[SECURITY] 🚨 Found blocked process: ${processName}`);
-
       if (cachedPolicy.showWarning) {
-        dialog.showMessageBoxSync({
-          type: 'warning',
-          title: 'Blocked Application',
-          message: `"${processName}" is blocked by your organization and will be closed.`
-        });
+        dialog.showMessageBoxSync({ type:'warning', title:'Blocked Application', message:`"${processName}" is blocked by your organization and will be closed.` });
       }
-
       if (cachedPolicy.killProcess) {
-        await new Promise<void>((resolve) => {
-          exec(`taskkill /F /IM "${processName}"`, () => resolve());
-        });
+        await new Promise<void>((resolve) => { exec(`taskkill /F /IM "${processName}"`, () => resolve()); });
         console.log(`[SECURITY] ✅ Process terminated: ${processName}`);
       }
-
-      await submitSecurityEvent(
-        'blocked_app',
-        normalizedProcess,
-        cachedPolicy.killProcess ? 'terminated' : 'warning_shown'
-      );
+      await submitSecurityEvent('blocked_app', np, cachedPolicy.killProcess ? 'terminated' : 'warning_shown');
     }
-
-    if (!violationFound) {
-      console.log('[SECURITY] No violations found');
-    }
-
+    if (!violationFound) console.log('[SECURITY] No violations found');
   } catch (err: any) {
     console.error('[SECURITY] Blocked app scan error:', err?.message || err);
   }
 }
 
-async function enforcePolicies() {
-  if (!token) return;
+// ─── Live streaming (WebRTC) ────────────────────────────────────────────────
+// A hidden BrowserWindow does the actual screen capture + RTCPeerConnection
+// work, because RTCPeerConnection / getUserMedia only exist in a renderer
+// (Chromium) context, not in this Node.js main process.
 
+function ensureStreamWindow(): BrowserWindow {
+  if (streamWindow && !streamWindow.isDestroyed()) return streamWindow;
+
+  streamWindow = new BrowserWindow({
+    show: false,
+    width: 400,
+    height: 300,
+    webPreferences: {
+      preload: path.join(__dirname, 'streamPreload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  const streamHtml = isDev
+    ? path.join(__dirname, '../assets/stream/stream.html')
+    : path.join(process.resourcesPath, 'assets', 'stream', 'stream.html');
+
+  streamWindow.loadFile(streamHtml).catch((err) => console.error('Failed to load stream window:', err));
+  streamWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.error('Stream window renderer crashed:', details);
+    streamWindow = null;
+  });
+
+  return streamWindow;
+}
+
+async function handleWatchRequest(watcherId: string) {
   try {
-    await syncPolicies();
-  } catch (err:any) {
-    console.error('[SECURITY] enforcePolicies error:', err?.message || err);
+    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } });
+    if (!sources.length) { console.error('No screen sources available for streaming'); return; }
+    const sourceId = sources[0].id;
+
+    const win = ensureStreamWindow();
+    activeWatchers.add(watcherId);
+
+    const send = () => win.webContents.send('stream:start', { watcherId, sourceId });
+    if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send);
+    else send();
+  } catch (err: any) {
+    console.error('Failed to start stream for watcher', watcherId, err?.message || err);
   }
 }
+
+function handleStopWatching(watcherId: string) {
+  activeWatchers.delete(watcherId);
+  streamWindow?.webContents.send('stream:stop', { watcherId });
+
+  if (activeWatchers.size === 0 && streamWindow && !streamWindow.isDestroyed()) {
+    // No one is watching anymore — close the hidden capture window to free resources.
+    streamWindow.close();
+    streamWindow = null;
+  }
+}
+
+function closeAllStreams() {
+  activeWatchers.forEach((watcherId) => streamWindow?.webContents.send('stream:stop', { watcherId }));
+  activeWatchers.clear();
+  if (streamWindow && !streamWindow.isDestroyed()) streamWindow.close();
+  streamWindow = null;
+}
+
+// Signaling data coming FROM the hidden stream window, forwarded OUT to the server
+ipcMain.on('stream:signal-out', (_e, data: { watcherId: string; type: 'offer' | 'ice'; sdp?: any; candidate?: any }) => {
+  if (data.type === 'offer') {
+    socket.emit('webrtc-offer', { watcherId: data.watcherId, sdp: data.sdp });
+  } else if (data.type === 'ice') {
+    socket.emit('webrtc-ice-candidate', { watcherId: data.watcherId, candidate: data.candidate });
+  }
+});
 
 // ─── Socket ─────────────────────────────────────────────────────────────────
 async function initializeSocket() {
   if (socket.connected) return;
   socket.connect();
-
   socket.on('connect', () => {
     console.log('Socket connected', socket.id);
-    // ✅ employeeId sirf tab bhejo jab available ho
     if (employeeId) {
-      socket.emit('register', { role: 'employee', employeeId });
+      socket.emit('register', { role: 'employee', employeeId, token });
       console.log('Registered with employeeId:', employeeId);
     }
+    setupLiveWatch(socket, employeeId);
   });
-
-  // ✅ Alert listener — server se alert aane par notification dikhao
   socket.on('new-alert', async (alert: any) => {
     console.log('🔔 Alert received from server:', alert);
-
-    // Store karo
     await persistAlert(alert);
-
-    // Electron Notification dikhao
     const { Notification } = await import('electron');
     if (Notification.isSupported()) {
-      const notif = new Notification({
-        title: alert.title || 'WorkTrack Alert',
-        body: alert.description || alert.message || '',
-        urgency: 'critical',
-      } as any);
+      const notif = new Notification({ title: alert.title || 'WorkTrack Alert', body: alert.description || alert.message || '', urgency: 'critical' } as any);
       notif.show();
     }
-
-    // Window ko bhi bhejo
     mainWindow?.webContents.send('new-alert', alert);
   });
+  socket.on('disconnect', (reason) => { console.log('Socket disconnected', reason); });
 
-  socket.on('disconnect', (reason) => {
-    console.log('Socket disconnected', reason);
+  // ── Live streaming signaling ──────────────────────────────────────────
+  socket.on('watch-request', ({ watcherId }: { watcherId: string }) => {
+    console.log('Watch request received from admin socket', watcherId);
+    handleWatchRequest(watcherId);
+  });
+  socket.on('webrtc-answer', ({ watcherId, sdp }: { watcherId: string; sdp: any }) => {
+    streamWindow?.webContents.send('stream:signal-in', { watcherId, type: 'answer', sdp });
+  });
+  socket.on('webrtc-ice-candidate', ({ watcherId, candidate }: { watcherId: string; candidate: any }) => {
+    streamWindow?.webContents.send('stream:signal-in', { watcherId, type: 'ice', candidate });
+  });
+  socket.on('stop-watching', ({ watcherId }: { watcherId: string }) => {
+    handleStopWatching(watcherId);
   });
 }
 
@@ -616,17 +520,7 @@ console.log('WorkTrack agent using SERVER_URL=', SERVER_URL);
 console.log('WorkTrack agent using SOCKET_SERVER_URL=', SOCKET_SERVER_URL);
 
 function broadcastStatus(extra: Record<string, any> = {}) {
-  const payload = {
-    agentId,
-    userName,
-    status,
-    sessionId,
-    activeApp: lastActiveApp,
-    activityPct: lastActivityPct,
-    heartbeat: new Date().toISOString(),
-    capturedAt: new Date().toISOString(),
-    ...extra,
-  };
+  const payload = { agentId, employeeId, userName, status, sessionId, activeApp: lastActiveApp, activityPct: lastActivityPct, heartbeat: new Date().toISOString(), capturedAt: new Date().toISOString(), ...extra };
   mainWindow?.webContents.send('status-changed', payload);
   if (socket.connected) {
     socket.emit('employee-status', payload);
@@ -637,63 +531,48 @@ function broadcastStatus(extra: Record<string, any> = {}) {
 async function sendHeartbeat() {
   if (!token) return;
   try {
-    await apiRequest('POST', '/api/heartbeat', {
-      currentApp: lastActiveApp,
-      activityPct: lastActivityPct,
-      status,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err:any) {
-    console.error('Heartbeat failed:', err?.message || err);
-  }
+    await apiRequest('POST', '/api/heartbeat', { currentApp: lastActiveApp, activityPct: lastActivityPct, status, timestamp: new Date().toISOString() });
+  } catch (err:any) { console.error('Heartbeat failed:', err?.message || err); }
+}
+
+function getScreenshotTargetSize() {
+  // Always capture screenshots at the fixed resolution requested by the user.
+  return { width: 1280, height: 720 };
 }
 
 async function captureAndUpload() {
   if (!tracking) return;
   try {
-    const display = screen.getPrimaryDisplay();
-    const sources = await desktopCapturer.getSources({
-      types:['screen'],
-      thumbnailSize:{ width:640, height:360 }
-    });
+    const { width, height } = getScreenshotTargetSize();
+    const sources = await desktopCapturer.getSources({ types:['screen'], thumbnailSize:{ width, height } });
     if (!sources.length) return;
-
-    const pngBuf  = sources[0].thumbnail.toPNG();
+    const resizedThumbnail = sources[0].thumbnail.resize({ width, height });
+    const pngBuf = resizedThumbnail.toPNG();
     const screenshotBase64 = pngBuf.toString('base64');
-    const capturedAt = new Date().toISOString();
-
+    const capturedAt       = new Date().toISOString();
     let activeApp = 'Unknown';
-    try {
-      const { default: activeWin } = await import('active-win');
-      const w = await activeWin();
-      activeApp = w?.owner?.name || w?.title?.split(' — ')[0] || 'Unknown';
-    } catch {}
-
+    try { const { default: activeWin } = await import('active-win'); const w = await activeWin(); activeApp = w?.owner?.name || w?.title?.split(' — ')[0] || 'Unknown'; } catch {}
     const idleSec = powerMonitor.getSystemIdleTime();
     const actPct  = Math.max(0, Math.min(100, Math.round(100 - (idleSec / 60) * 100)));
-    lastActiveApp = activeApp;
+    lastActiveApp   = activeApp;
     lastActivityPct = actPct;
-
     mainWindow?.webContents.send('screenshot-taken', { time:new Date().toLocaleTimeString(), app:activeApp, pct:actPct });
     broadcastStatus({ screenshotBase64, activeApp, activityPct: actPct, capturedAt });
     await uploadScreenshot(pngBuf, activeApp, actPct, capturedAt);
-  } catch(e){ console.error('Capture error:',e); }
+  } catch(e) { console.error('Capture error:',e); }
 }
 
-// ─── Session management ────────────────────────────────────────────────────
+// ─── Session management ─────────────────────────────────────────────────────
 async function startTracking() {
   if (tracking) return;
   tracking = true;
   await initializeSocket();
   await startSession();
-  ssInterval   = setInterval(captureAndUpload, captureIntervalSec * 1000);
-  idleInterval = setInterval(watchIdle, 2000);
+  ssInterval        = setInterval(captureAndUpload, captureIntervalSec * 1000);
+  idleInterval      = setInterval(watchIdle, 2000);
   heartbeatInterval = setInterval(() => sendHeartbeat(), 30000);
-  policyInterval = setInterval(() => { void enforcePolicies(); }, 5000);
-  scanInterval = setInterval(() => {
-    void scanBlockedApps();
-    void scanBlockedWebsites();
-  }, 2000);
+  policyInterval    = setInterval(() => { void enforcePolicies(); }, 5000);
+  scanInterval      = setInterval(() => { void scanBlockedApps(); void scanBlockedWebsites(); }, 2000);
   policySyncInterval = setInterval(() => { void syncPolicies(); }, 30000);
   captureAndUpload();
   await sendHeartbeat();
@@ -709,14 +588,33 @@ async function stopTracking() {
   if (!tracking) return;
   tracking = false;
   await endSession();
-  if (ssInterval)   clearInterval(ssInterval);
-  if (idleInterval) clearInterval(idleInterval);
-  if (heartbeatInterval) clearInterval(heartbeatInterval);
-  if (policyInterval) clearInterval(policyInterval);
-  if (scanInterval) clearInterval(scanInterval);
+  if (ssInterval)         clearInterval(ssInterval);
+  if (idleInterval)       clearInterval(idleInterval);
+  if (heartbeatInterval)  clearInterval(heartbeatInterval);
+  if (policyInterval)     clearInterval(policyInterval);
+  if (scanInterval)       clearInterval(scanInterval);
   if (policySyncInterval) clearInterval(policySyncInterval);
   policySyncInterval = null;
   status = 'offline';
+  async function stopTracking() {
+  if (!tracking) return;
+  tracking = false;
+  await endSession();
+  if (ssInterval)         clearInterval(ssInterval);
+  if (idleInterval)       clearInterval(idleInterval);
+  if (heartbeatInterval)  clearInterval(heartbeatInterval);
+  if (policyInterval)     clearInterval(policyInterval);
+  if (scanInterval)       clearInterval(scanInterval);
+  if (policySyncInterval) clearInterval(policySyncInterval);
+  policySyncInterval = null;
+  status = 'offline';
+  teardownLiveWatch();          // ← ADD KARO (closeAllStreams() ki jagah, ya saath mein)
+  updateTray();
+  mainWindow?.webContents.send('tracking-status',{ tracking:false });
+  broadcastStatus();
+}
+app.on('before-quit',()=>{ tracking && stopTracking(); teardownLiveWatch(); removeProxyBlock(); });
+  closeAllStreams();
   updateTray();
   mainWindow?.webContents.send('tracking-status',{ tracking:false });
   broadcastStatus();
@@ -726,16 +624,8 @@ async function watchIdle() {
   const idleSec = powerMonitor.getSystemIdleTime();
   const isIdle  = idleSec > 60;
   mainWindow?.webContents.send('idle-status',{ isIdle, idleSec });
-
-  if (isIdle && status === 'active') {
-    status = 'idle';
-    broadcastStatus();
-  }
-
-  if (!isIdle && status === 'idle') {
-    status = 'active';
-    broadcastStatus();
-  }
+  if (isIdle && status === 'active')  { status = 'idle';   broadcastStatus(); }
+  if (!isIdle && status === 'idle')   { status = 'active'; broadcastStatus(); }
 }
 
 // ─── Tray ───────────────────────────────────────────────────────────────────
@@ -753,7 +643,7 @@ function updateTray() {
   tray.setToolTip(tracking?`WorkTrack — tracking ${userName}`:'WorkTrack — not tracking');
 }
 
-// ─── Window ────────────────────────────────────────────────────────────────
+// ─── Window ─────────────────────────────────────────────────────────────────
 function createWindow() {
   mainWindow = new BrowserWindow({
     width:380, height:560, resizable:false,
@@ -761,25 +651,27 @@ function createWindow() {
     webPreferences:{ preload:path.join(__dirname,'preload.js'), contextIsolation:true, nodeIntegration:false },
     show: true,
   });
-mainWindow.webContents.openDevTools();
 
-mainWindow.webContents.on('did-fail-load', (_, code, desc, url) => {
-  console.log('LOAD FAILED:', code, desc, url);
-});
+  mainWindow.webContents.on('did-fail-load', (_, code, desc, url) => {
+    console.log('LOAD FAILED:', code, desc, url);
+  });
+  mainWindow.webContents.on('render-process-gone', (_, details) => {
+    console.log('RENDERER CRASHED:', details);
+  });
 
-mainWindow.webContents.on('render-process-gone', (_, details) => {
-  console.log('RENDERER CRASHED:', details);
-});
   if (isDev) {
-  mainWindow.loadURL('http://localhost:5174');
-} else {
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
-}
+    mainWindow.loadURL('http://localhost:5174');
+    mainWindow.webContents.openDevTools();
+  } else {
+    const indexPath = path.join(__dirname, 'renderer', 'index.html');
+    console.log('Loading index from:', indexPath, '| exists:', fs.existsSync(indexPath));
+    mainWindow.loadFile(indexPath).catch((err) => console.error('loadFile error:', err));
+  }
 
   mainWindow.on('close',(e)=>{ e.preventDefault(); mainWindow?.hide(); });
 }
 
-// ─── IPC ───────────────────────────────────────────────────────────────────
+// ─── IPC ────────────────────────────────────────────────────────────────────
 ipcMain.handle('login', async (_e, email:string, password:string) => {
   try {
     const res = await apiRequest('POST','/api/auth',{ email, password });
@@ -787,16 +679,8 @@ ipcMain.handle('login', async (_e, email:string, password:string) => {
     token      = res.token;
     userName   = res.user?.name || '';
     employeeId = res.user?.id || '';
-    set('token', token);
-    set('userName', userName);
-    set('employeeId', employeeId);
-
-    // ✅ Login ke baad socket mein employeeId register karo
-    if (socket.connected) {
-      socket.emit('register', { role: 'employee', employeeId });
-      console.log('Re-registered socket with employeeId:', employeeId);
-    }
-
+    set('token', token); set('userName', userName); set('employeeId', employeeId);
+    if (socket.connected) { socket.emit('register', { role: 'employee', employeeId, token }); console.log('Re-registered socket with employeeId:', employeeId); }
     await startTracking();
     return { ok:true, user:res.user };
   } catch (error:any) {
@@ -807,58 +691,48 @@ ipcMain.handle('login', async (_e, email:string, password:string) => {
 
 ipcMain.handle('logout', async () => {
   if (token) {
-    try {
-      await sessionAction('logout');
-    } catch (err:any) {
-      console.error('Logout action failed:', err?.message || err);
-    }
+    try { await endSession(); await sessionAction('logout'); }
+    catch (err:any) { console.error('Logout action failed:', err?.message || err); }
   }
   await stopTracking();
-  token=''; userName=''; employeeId=''; set('token',''); set('userName',''); set('employeeId','');
+  token=''; userName=''; employeeId='';
+  set('token',''); set('userName',''); set('employeeId','');
   status='offline';
   mainWindow?.webContents.send('status-changed',{ status:'offline' });
   mainWindow?.show();
   return { ok:true };
 });
 
-ipcMain.handle('get-status', () => ({ tracking, status, sessionId, userName, captureIntervalSec, idleSec: powerMonitor.getSystemIdleTime(), startedAt: status !== 'offline' ? Date.now() : null }));
-ipcMain.handle('get-alerts', async () => getStoredAlerts());
-ipcMain.handle('sync-alerts', async () => syncAlertsWithServer());
-ipcMain.handle('mark-alert-read', async (_e, id:string) => markAlertRead(id));
-ipcMain.handle('store-alert', async (_e, alert:any) => {
-  const saved = await persistAlert(alert);
-  mainWindow?.webContents.send('new-alert', saved);
-  return saved;
-});
-ipcMain.handle('manual-shot', () => captureAndUpload());
-ipcMain.handle('stop-tracking', () => stopTracking());
-ipcMain.handle('start-tracking', () => { status = 'active'; return startTracking(); });
-ipcMain.handle('start-work', async () => {
-  status = 'active';
-  await startTracking();
-  if (token) await sessionAction('start');
-});
-ipcMain.handle('start-break', async () => {
+ipcMain.handle('get-status',       () => ({ tracking, status, sessionId, userName, captureIntervalSec, idleSec: powerMonitor.getSystemIdleTime(), startedAt: status !== 'offline' ? Date.now() : null }));
+ipcMain.handle('get-alerts',       async () => getStoredAlerts());
+ipcMain.handle('sync-alerts',      async () => syncAlertsWithServer());
+ipcMain.handle('mark-alert-read',  async (_e, id:string) => markAlertRead(id));
+ipcMain.handle('store-alert',      async (_e, alert:any) => { const saved = await persistAlert(alert); mainWindow?.webContents.send('new-alert', saved); return saved; });
+ipcMain.handle('manual-shot',      () => captureAndUpload());
+ipcMain.handle('stop-tracking',    () => stopTracking());
+ipcMain.handle('start-tracking',   () => { status = 'active'; return startTracking(); });
+ipcMain.handle('start-work',       async () => { status = 'active'; await startTracking(); if (token) await sessionAction('start'); });
+ipcMain.handle('start-break',      async () => {
   status = 'break';
+  if (ssInterval)        clearInterval(ssInterval);
+  if (heartbeatInterval) clearInterval(heartbeatInterval);
   await sessionAction('start_break', { sessionId });
-  return broadcastStatus();
+  broadcastStatus();
+  return { ok: true };
 });
 ipcMain.handle('end-break', async () => {
-  if (!sessionId) return { ok:false, error:'No active session' };
-  await sessionAction('end_break', { sessionId });
   status = 'active';
-  return broadcastStatus();
+  await sessionAction('end_break', { sessionId });
+  ssInterval        = setInterval(captureAndUpload, captureIntervalSec * 1000);
+  heartbeatInterval = setInterval(() => sendHeartbeat(), 30000);
+  broadcastStatus();
+  return { ok: true };
 });
-ipcMain.handle('checkout', async () => {
-  status = 'offline';
-  await stopTracking();
-});
+ipcMain.handle('checkout', async () => { await endSession(); await stopTracking(); });
 
-// ─── Boot ───────────────────────────────────────────────────────────────────
+// ─── Boot ────────────────────────────────────────────────────────────────────
 app.whenReady().then(async ()=>{
   createWindow();
-
-  // Tray
   const iconPath = path.join(
     isDev ? path.join(__dirname,'../assets') : process.resourcesPath,
     process.platform==='win32'?'icon.ico':process.platform==='darwin'?'icon.icns':'icon.png'
@@ -867,7 +741,6 @@ app.whenReady().then(async ()=>{
   tray = new Tray(process.platform==='darwin' ? icon.resize({width:18,height:18}) : icon);
   tray.on('double-click',()=>mainWindow?.show());
   updateTray();
-
   mainWindow?.show();
   if (token) {
     try {
@@ -875,7 +748,8 @@ app.whenReady().then(async ()=>{
       startTracking();
     } catch {
       console.log('Stored token invalid/expired — clearing, user must log in again');
-      token = ''; userName = ''; employeeId=''; set('token',''); set('userName',''); set('employeeId','');
+      token=''; userName=''; employeeId='';
+      set('token',''); set('userName',''); set('employeeId','');
       status = 'offline';
       mainWindow?.webContents.send('status-changed', { status:'offline' });
     }
@@ -883,4 +757,4 @@ app.whenReady().then(async ()=>{
 });
 
 app.on('window-all-closed',()=>{ /* keep alive in tray */ });
-app.on('before-quit',()=>{ tracking && stopTracking(); removeProxyBlock(); });
+app.on('before-quit',()=>{ tracking && stopTracking(); closeAllStreams(); removeProxyBlock(); });

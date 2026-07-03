@@ -5,7 +5,7 @@
   "main": "dist/main.js",
   "scripts": {
     "dev": "concurrently \"vite\" \"tsc -p tsconfig.electron.json --watch\" \"wait-on http://localhost:5174 && wait-on dist/main.js && electron .\"",
-    "build": "vite build && tsc -p tsconfig.electron.json && electron-builder --win",
+    "build": "vite build && tsc -p tsconfig.electron.json && node scripts/copy-electron-assets.cjs && electron-builder --win",
     "pack": "electron-builder --dir"
   },
   "dependencies": {
@@ -38,7 +38,10 @@
       "main": "dist/main.js"
     },
     "files": [
-      "dist/**/*"
+      "dist/**/*",
+      "src/capture.html",
+      "src/capture-preload.ts",
+      "src/capture-renderer.ts"
     ],
     "win": {
       "target": [
@@ -48,8 +51,7 @@
             "x64"
           ]
         }
-      ],
-      "requestedExecutionLevel": "requireAdministrator"
+      ]
     },
     "nsis": {
       "oneClick": true,
