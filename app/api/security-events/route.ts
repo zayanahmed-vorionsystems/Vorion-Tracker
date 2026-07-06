@@ -10,12 +10,15 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const limitParam = searchParams.get('limit');
+    const isEmployee = user.role === 'employee';
+    const isTeamLead = user.role === 'team_lead';
     const events = await listSecurityEvents({
-      employeeId: searchParams.get('employeeId') || undefined,
+      employeeId: isEmployee ? user.sub : (searchParams.get('employeeId') || undefined),
       date: searchParams.get('date') || undefined,
       eventType: searchParams.get('eventType') || undefined,
       limit: limitParam ? Number(limitParam) : undefined,
-      viewAs: user.role === 'employee' ? 'employee' : undefined,
+      viewAs: isEmployee ? 'employee' : undefined,
+      departmentId: isTeamLead ? user.teamId : undefined,
     });
     return ok(events);
   } catch (e: any) {
@@ -30,8 +33,12 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
+    const targetEmployeeId =
+      ['super_admin', 'admin', 'qa_manager', 'team_lead'].includes(user.role)
+        ? body?.employee_id || body?.employeeId || user.sub || null
+        : user.sub || null;
     const event = await createSecurityEvent({
-      employeeId: body?.employee_id || body?.employeeId || user.sub || null,
+      employeeId: targetEmployeeId,
       computerName: body?.computer_name || body?.computerName || null,
       eventType: String(body?.event_type || body?.eventType || '').trim(),
       value: body?.value ? String(body.value) : null,

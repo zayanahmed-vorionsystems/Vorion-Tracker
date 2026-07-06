@@ -1,7 +1,7 @@
 'use client';
 // store/auth.ts
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist } from 'zustand/middleware';
 
 export type Role = 'super_admin'|'admin'|'qa_manager'|'team_lead'|'employee';
 
@@ -26,7 +26,10 @@ export const useAuthStore = create<AuthState>()(
       },
       logout: () => set({ token: null, user: null }),
     }),
-    { name: 'worktrack-auth' }
+    {
+      name: 'worktrack-auth',
+      storage: createJSONStorage(() => sessionStorage),
+    }
   )
 );
 

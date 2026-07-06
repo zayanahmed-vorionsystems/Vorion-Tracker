@@ -5,6 +5,9 @@ import { requireAuth, ok, err } from '@/lib/api';
 import { supabaseAdmin } from '@/lib/supabase';
 import { emitSocketEvent } from '@/lib/socket';
 
+const MAX_RECORDING_BYTES = 100 * 1024 * 1024;
+const ALLOWED_RECORDING_TYPES = new Set(['video/webm', 'video/webm;codecs=vp8', 'video/webm;codecs=vp9,opus']);
+
 export async function POST(req: NextRequest) {
   if (!process.env.DATABASE_URL) return err('Server misconfigured: DATABASE_URL not set', 500);
   const user = requireAuth(req);
@@ -17,6 +20,8 @@ export async function POST(req: NextRequest) {
   const capturedAt = formData.get('capturedAt') as string || new Date().toISOString();
 
   if (!file) return err('No recording file');
+  if (file.size > MAX_RECORDING_BYTES) return err('Recording file is too large', 413);
+  if (!ALLOWED_RECORDING_TYPES.has(file.type || '')) return err('Unsupported recording file type', 400);
 
   const arrayBuffer = await file.arrayBuffer();
   const buffer      = Buffer.from(arrayBuffer);
@@ -74,6 +79,31 @@ export async function GET(req: NextRequest) {
       ORDER BY r.captured_at DESC
       LIMIT ${limit}
     `;
+  } else if (user.role === 'team_lead') {
+    if (filterUserId) {
+      rows = await sql`
+        SELECT r.*, p.full_name AS user_name
+        FROM recordings r
+        JOIN public.profiles p ON p.id = r.user_id
+        WHERE p.department_id = (
+          SELECT department_id FROM public.profiles WHERE id = ${user.sub}
+        )
+        AND r.user_id = ${filterUserId}
+        ORDER BY r.captured_at DESC
+        LIMIT ${limit}
+      `;
+    } else {
+      rows = await sql`
+        SELECT r.*, p.full_name AS user_name
+        FROM recordings r
+        JOIN public.profiles p ON p.id = r.user_id
+        WHERE p.department_id = (
+          SELECT department_id FROM public.profiles WHERE id = ${user.sub}
+        )
+        ORDER BY r.captured_at DESC
+        LIMIT ${limit}
+      `;
+    }
   } else if (filterUserId) {
     rows = await sql`
       SELECT r.*, p.full_name AS user_name

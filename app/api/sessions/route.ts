@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
 import { emitSocketEvent } from '@/lib/socket';
+import { clampLimit } from '@/lib/request-security';
 
 function employeeStatusPayload(user: any, status: string, appName?: string | null) {
   const timestamp = new Date().toISOString();
@@ -159,6 +160,15 @@ await sql`
         `;
       }
 
+      if (!attendance) {
+        [attendance] = await sql`
+          SELECT id, check_in FROM attendance
+          WHERE employee_id = ${user.sub} AND check_out IS NULL
+          ORDER BY check_in DESC
+          LIMIT 1
+        `;
+      }
+
       if (!attendance) return err('Attendance record not found', 404);
 const breakResult = await sql`
   SELECT COALESCE(SUM(duration_minutes), 0) AS break_minutes
@@ -247,6 +257,7 @@ export async function GET(req: NextRequest) {
   const { role, sub } = user;
   const { searchParams } = new URL(req.url);
   const date = searchParams.get('date') || new Date().toISOString().slice(0, 10);
+  const limit = clampLimit(searchParams.get('limit'), 200, 500);
 
   try {
     let rows;
@@ -257,6 +268,19 @@ export async function GET(req: NextRequest) {
         JOIN public.profiles p ON p.id = a.employee_id
         WHERE a.employee_id = ${sub} AND DATE(a.check_in) = ${date}
         ORDER BY a.check_in DESC
+        LIMIT ${limit}
+      `;
+    } else if (role === 'team_lead') {
+      rows = await sql`
+        SELECT a.*, p.full_name AS user_name
+        FROM attendance a
+        JOIN public.profiles p ON p.id = a.employee_id
+        WHERE DATE(a.check_in) = ${date}
+          AND p.department_id = (
+            SELECT department_id FROM public.profiles WHERE id = ${sub}
+          )
+        ORDER BY a.check_in DESC
+        LIMIT ${limit}
       `;
     } else {
       rows = await sql`
@@ -265,7 +289,7 @@ export async function GET(req: NextRequest) {
         JOIN public.profiles p ON p.id = a.employee_id
         WHERE DATE(a.check_in) = ${date}
         ORDER BY a.check_in DESC
-        LIMIT 200
+        LIMIT ${limit}
       `;
     }
     return ok(rows);

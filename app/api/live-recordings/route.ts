@@ -1,18 +1,55 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
+import { sql } from '@/lib/db';
 import { supabaseAdmin } from '@/lib/supabase';
+import { requireAuth, ok, err } from '@/lib/api';
+
+const MAX_RECORDING_BYTES = 100 * 1024 * 1024;
+const ALLOWED_RECORDING_TYPES = new Set(['video/webm', 'video/webm;codecs=vp8', 'video/webm;codecs=vp9,opus']);
+
+async function canManageLiveRecording(user: any, employeeId: string) {
+  if (['super_admin', 'admin', 'qa_manager'].includes(user.role)) return true;
+  if (user.role !== 'team_lead') return false;
+
+  const rows = await sql`
+    SELECT 1
+    FROM public.profiles lead
+    JOIN public.profiles employee
+      ON employee.id = ${employeeId}
+     AND employee.department_id = lead.department_id
+    WHERE lead.id = ${user.sub}
+      AND lead.department_id IS NOT NULL
+    LIMIT 1
+  `;
+
+  return rows.length > 0;
+}
 
 export async function POST(request: NextRequest) {
+  const user = requireAuth(request);
+  if ('status' in user) return user;
+
   try {
     const formData = await request.formData();
     const employeeId = String(formData.get('employeeId') || '');
-    const adminId = String(formData.get('adminId') || '');
     const startTime = String(formData.get('startTime') || new Date().toISOString());
     const endTime = String(formData.get('endTime') || new Date().toISOString());
     const duration = Number(formData.get('duration') || 0);
     const file = formData.get('file');
 
+    if (!employeeId) {
+      return err('Employee id is required.', 400);
+    }
+    if (!(await canManageLiveRecording(user, employeeId))) {
+      return err('Forbidden', 403);
+    }
     if (!file || typeof file === 'string') {
-      return NextResponse.json({ error: 'Recording file is required.' }, { status: 400 });
+      return err('Recording file is required.', 400);
+    }
+    if (file.size > MAX_RECORDING_BYTES) {
+      return err('Recording file is too large.', 413);
+    }
+    if (!ALLOWED_RECORDING_TYPES.has(file.type || '')) {
+      return err('Unsupported recording file type.', 400);
     }
 
     const bytes = await file.arrayBuffer();
@@ -30,17 +67,17 @@ export async function POST(request: NextRequest) {
 
       if (error) {
         console.error('[live-recordings] Supabase upload failed', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        return err(error.message, 500);
       }
 
       const { data: signedData } = await supabaseAdmin.storage
         .from('live-recordings')
-        .createSignedUrl(data?.path || fileName, 60 * 60 * 24 * 7);
+        .createSignedUrl(data?.path || fileName, 60 * 60);
 
-      return NextResponse.json({
+      return ok({
         ok: true,
         employeeId,
-        adminId,
+        adminId: user.sub,
         startTime,
         endTime,
         duration,
@@ -48,10 +85,10 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    return NextResponse.json({
+    return ok({
       ok: true,
       employeeId,
-      adminId,
+      adminId: user.sub,
       startTime,
       endTime,
       duration,
@@ -59,6 +96,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error('[live-recordings] failed', error?.stack || error);
-    return NextResponse.json({ error: error?.message || 'Recording upload failed' }, { status: 500 });
+    return err(error?.message || 'Recording upload failed', 500);
   }
 }

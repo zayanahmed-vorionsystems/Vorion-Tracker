@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently \"next dev\" \"node server/socket-server.js\"",
+    "dev": "node scripts/start-dev.js",
     "build": "next build",
     "start": "next start",
     "socket-server": "node server/socket-server.js",

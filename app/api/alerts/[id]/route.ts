@@ -3,6 +3,10 @@ import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
 
+function hasModernAlertSchema(columns: Set<string>) {
+  return columns.has('employee_id') && columns.has('alert_type') && columns.has('title') && columns.has('description');
+}
+
 export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   const { params } = context;
   const resolvedParams = await params;
@@ -11,18 +15,37 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
 
   try {
     const columns = await sql`SELECT column_name FROM information_schema.columns WHERE table_name = 'alerts'`;
-    const names = new Set(columns.map((row: any) => row.column_name));
-    const hasModernSchema = names.has('employee_id') && names.has('alert_type') && names.has('title') && names.has('description');
+    const names = new Set<string>(columns.map((row: any) => String(row.column_name)));
+    const hasModernSchema = hasModernAlertSchema(names);
+    const hasIsReadColumn = names.has('is_read');
+    const hasStatusColumn = names.has('status');
 
     let updated: any[];
 
     if (hasModernSchema) {
-      updated = await sql`
-        UPDATE alerts
-        SET is_read = true
-        WHERE id = ${resolvedParams.id} AND employee_id = ${user.sub}
-        RETURNING id, employee_id, alert_type, title, description, severity, status, metadata, is_read, created_at, sent_at
-      `;
+      if (hasIsReadColumn) {
+        updated = await sql`
+          UPDATE alerts
+          SET is_read = true
+          WHERE id = ${resolvedParams.id} AND employee_id = ${user.sub}
+          RETURNING id, employee_id, alert_type, title, description, severity, status, metadata, is_read, created_at, sent_at
+        `;
+      } else if (hasStatusColumn) {
+        updated = await sql`
+          UPDATE alerts
+          SET status = 'read'
+          WHERE id = ${resolvedParams.id} AND employee_id = ${user.sub}
+          RETURNING id, employee_id, alert_type, title, description, severity, status, metadata, created_at, sent_at
+        `;
+        updated = updated.map((row: any) => ({ ...row, is_read: true }));
+      } else {
+        updated = await sql`
+          SELECT id, employee_id, alert_type, title, description, severity, metadata, created_at, sent_at
+          FROM alerts
+          WHERE id = ${resolvedParams.id} AND employee_id = ${user.sub}
+        `;
+        updated = updated.map((row: any) => ({ ...row, is_read: true }));
+      }
     } else {
       updated = await sql`
         UPDATE alerts

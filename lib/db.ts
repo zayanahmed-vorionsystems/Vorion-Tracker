@@ -10,8 +10,6 @@ function stripQuotes(value: string): string {
 
 const rawDatabaseUrl = process.env.DATABASE_URL ?? '';
 const connectionString = rawDatabaseUrl ? stripQuotes(rawDatabaseUrl) : '';
-console.log('DATABASE_URL present:', !!connectionString);
-console.log('SUPABASE_URL:', process.env.NEXT_PUBLIC_SUPABASE_URL || 'NOT SET');
 
 let pool: Pool | null = null;
 

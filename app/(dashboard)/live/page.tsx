@@ -136,6 +136,15 @@ export default function LiveMonitorPage() {
   const [isRecording, setIsRecording] = useState(false);
   const [recordingError, setRecordingError] = useState<string | null>(null);
 
+  function normalizeStatus(value?: string | null) {
+    const raw = String(value || '').toLowerCase();
+    if (raw === 'active' || raw === 'working') return 'working';
+    if (raw === 'break' || raw === 'on_break') return 'on_break';
+    if (raw === 'checked_out' || raw === 'checkout' || raw === 'check_out') return 'checked_out';
+    if (raw === 'idle' || raw === 'offline') return 'offline';
+    return raw || 'offline';
+  }
+
   useEffect(() => {
     (async () => {
       try {
@@ -153,6 +162,8 @@ export default function LiveMonitorPage() {
   }, [token]);
 
   useEffect(() => {
+    if (!token || !user?.id) return;
+
     const runtimeUrl = (typeof window !== 'undefined')
       ? (process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || `${window.location.protocol}//${window.location.hostname}:4000`)
       : SOCKET_SERVER_URL;
@@ -182,17 +193,19 @@ export default function LiveMonitorPage() {
     socket.on('employee-status', (data: any) => {
       const agentKey = String(data.employeeId ?? data.agentId ?? 'unknown-agent');
       setAgents(prev => {
+        const existing = prev.find(item => item.agentId === agentKey);
+        const normalized = normalizeStatus(data.status);
         const updated = {
           agentId: agentKey,
-          name: data.userName || data.agentId || 'Employee',
-          status: data.status || 'offline',
-          online: data.status !== 'offline',
+          name: data.employeeName || data.userName || existing?.name || 'Employee',
+          status: normalized,
+          online: normalized !== 'offline',
           activeApp: data.activeApp,
           activityPct: data.activityPct,
-          lastUrl: data.screenshotBase64 ? `data:image/png;base64,${data.screenshotBase64}` : prev.find(item => item.agentId === agentKey)?.lastUrl,
-          lastSeen: data.heartbeat || data.capturedAt || prev.find(item => item.agentId === agentKey)?.lastSeen,
+          lastUrl: data.screenshotBase64 ? `data:image/png;base64,${data.screenshotBase64}` : existing?.lastUrl,
+          lastSeen: data.heartbeat || data.lastActivity || data.capturedAt || existing?.lastSeen,
         };
-        const exists = prev.some(item => item.agentId === agentKey);
+        const exists = Boolean(existing);
         return exists ? prev.map(item => item.agentId === agentKey ? { ...item, ...updated } : item) : [updated, ...prev];
       });
     });
@@ -243,7 +256,7 @@ export default function LiveMonitorPage() {
       stopStream();
       socket.disconnect();
     };
-  }, [user?.id, user?.role]);
+  }, [token, user?.id, user?.role]);
 
   useEffect(() => {
     const channel = supabaseClient
@@ -253,16 +266,16 @@ export default function LiveMonitorPage() {
         if (!record) return;
         const agentKey = String(record.employee_id);
         setAgents(prev => {
-          const updated = {
-            agentId: agentKey,
-            name: prev.find(item => item.agentId === agentKey)?.name || record.employee_id,
-            status: record.current_status || 'offline',
-            online: record.current_status !== 'offline',
-            activeApp: record.current_app ?? undefined,
-            activityPct: undefined,
-            lastUrl: prev.find(item => item.agentId === agentKey)?.lastUrl,
-            lastSeen: record.last_activity,
-          };
+        const updated = {
+          agentId: agentKey,
+          name: prev.find(item => item.agentId === agentKey)?.name || record.employee_id,
+          status: normalizeStatus(record.current_status),
+          online: normalizeStatus(record.current_status) !== 'offline',
+          activeApp: record.current_app ?? undefined,
+          activityPct: undefined,
+          lastUrl: prev.find(item => item.agentId === agentKey)?.lastUrl,
+          lastSeen: record.last_activity,
+        };
           const exists = prev.some(item => item.agentId === agentKey);
           return exists ? prev.map(item => item.agentId === agentKey ? { ...item, ...updated } : item) : [updated, ...prev];
         });
@@ -270,7 +283,7 @@ export default function LiveMonitorPage() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'screenshots' }, (payload) => {
         const record = (payload as any).new ?? (payload as any).record;
         if (!record) return;
-        const agentKey = String(record.user_id);
+        const agentKey = String(record.employee_id ?? record.user_id);
         setAgents(prev => prev.map(item => {
           if (item.agentId !== agentKey) return item;
           return {

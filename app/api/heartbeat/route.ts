@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
 import { emitSocketEvent } from '@/lib/socket';
+import { normalizePresenceStatus } from '@/lib/status';
 
 export async function POST(req: NextRequest) {
   const user = requireAuth(req);
@@ -11,7 +12,7 @@ export async function POST(req: NextRequest) {
   const now = timestamp ? new Date(timestamp).toISOString() : new Date().toISOString();
 
   try {
-    const statusValue = currentStatus || 'working';
+    const statusValue = normalizePresenceStatus(currentStatus);
 
     await sql`
       INSERT INTO employee_status(employee_id, current_status, current_app, last_activity, updated_at)

@@ -10,7 +10,8 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const type   = searchParams.get('type') || 'daily';
   const date   = searchParams.get('date') || new Date().toISOString().slice(0, 10);
-  const userId = searchParams.get('userId');
+  const isEmployee = user.role === 'employee';
+  const isTeamLead = user.role === 'team_lead';
 
   try {
 
@@ -87,6 +88,9 @@ export async function GET(req: NextRequest) {
           )                                            AS last_active,
           CASE
             WHEN es.last_activity IS NULL OR es.last_activity < NOW() - INTERVAL '3 minutes' THEN 'offline'
+            WHEN es.current_status IN ('active', 'working') THEN 'working'
+            WHEN es.current_status IN ('break', 'on_break') THEN 'on_break'
+            WHEN es.current_status IN ('checked_out', 'checkout', 'check_out') THEN 'checked_out'
             ELSE es.current_status
           END                                          AS current_status,
           es.current_app
@@ -96,6 +100,11 @@ export async function GET(req: NextRequest) {
         LEFT JOIN activity_summary    act ON act.employee_id = p.id
         LEFT JOIN employee_status     es  ON es.employee_id  = p.id
         WHERE p.role = 'employee'
+          AND (
+            (${isEmployee} = true AND p.id = ${user.sub})
+            OR (${isTeamLead} = true AND p.department_id = ${user.teamId})
+            OR (${isEmployee} = false AND ${isTeamLead} = false)
+          )
         ORDER BY total_seconds DESC
       `;
       return ok({ date, rows });
@@ -121,7 +130,14 @@ export async function GET(req: NextRequest) {
             COALESCE(b.break_minutes, 0) AS break_minutes
           FROM attendance a
           LEFT JOIN break_summary b ON b.attendance_id = a.id
+          JOIN public.profiles p ON p.id = a.employee_id
           WHERE a.check_in >= NOW() - INTERVAL '7 days'
+            AND p.role = 'employee'
+            AND (
+              (${isEmployee} = true AND a.employee_id = ${user.sub})
+              OR (${isTeamLead} = true AND p.department_id = ${user.teamId})
+              OR (${isEmployee} = false AND ${isTeamLead} = false)
+            )
         )
         SELECT
           day,
@@ -135,7 +151,13 @@ export async function GET(req: NextRequest) {
           (
             SELECT COUNT(*)
             FROM screenshots s
+            JOIN public.profiles sp ON sp.id = s.employee_id
             WHERE DATE(s.captured_at) = day
+              AND (
+                (${isEmployee} = true AND s.employee_id = ${user.sub})
+                OR (${isTeamLead} = true AND sp.department_id = ${user.teamId})
+                OR (${isEmployee} = false AND ${isTeamLead} = false)
+              )
           )                                            AS screenshots
         FROM attendance_weekly
         GROUP BY day

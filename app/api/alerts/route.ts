@@ -15,10 +15,16 @@ async function getAlertColumns() {
   }
 }
 
+function hasModernAlertSchema(columns: Set<string>) {
+  return columns.has('employee_id') && columns.has('alert_type') && columns.has('title') && columns.has('description');
+}
+
 function normalizeAlertRow(row: any, columns: Set<string>) {
   if (!row) return null;
 
-  const hasModernSchema = columns.has('employee_id') && columns.has('alert_type') && columns.has('title') && columns.has('description');
+  const hasModernSchema = hasModernAlertSchema(columns);
+  const hasIsReadColumn = columns.has('is_read');
+  const inferredReadState = hasIsReadColumn ? row.is_read : row.status === 'read';
 
   if (hasModernSchema) {
     return {
@@ -30,7 +36,7 @@ function normalizeAlertRow(row: any, columns: Set<string>) {
       severity: row.severity ?? 'medium',
       status: row.status ?? 'open',
       metadata: row.metadata ?? {},
-      is_read: Boolean(row.is_read ?? false),
+      is_read: Boolean(inferredReadState ?? false),
       created_at: row.created_at ?? row.sent_at,
       sent_at: row.sent_at ?? row.created_at,
     };
@@ -57,7 +63,6 @@ export async function POST(req: NextRequest) {
   if (!canSendAlerts(user.role)) return NextResponse.json({ error: 'No permission to send alerts' }, { status: 403 });
 
   const body = await req.json();
-  console.log('Alert Request:', body);
 
   const {
     employee_id,
@@ -83,12 +88,11 @@ export async function POST(req: NextRequest) {
   if (!description) invalidFields.description = true;
 
   if (Object.keys(invalidFields).length) {
-    console.log('Alert validation failed:', invalidFields);
     return NextResponse.json({ message: 'Validation failed', missing }, { status: 400 });
   }
 
   const columns = await getAlertColumns();
-  const hasModernSchema = columns.has('employee_id') && columns.has('alert_type') && columns.has('title') && columns.has('description');
+  const hasModernSchema = hasModernAlertSchema(columns);
 
   let inserted: any;
 
@@ -156,18 +160,29 @@ export async function GET(req: NextRequest) {
   if ('status' in user) return user;
 
   const columns = await getAlertColumns();
-  const hasModernSchema = columns.has('employee_id') && columns.has('alert_type') && columns.has('title') && columns.has('description');
+  const hasModernSchema = hasModernAlertSchema(columns);
+  const hasIsReadColumn = columns.has('is_read');
 
   let alerts: any[];
 
   if (hasModernSchema) {
-    alerts = await sql`
-      SELECT id, employee_id, alert_type, title, description, severity, status, metadata, is_read, created_at, sent_at
-      FROM alerts
-      WHERE employee_id = ${user.sub}
-      ORDER BY COALESCE(sent_at, created_at, NOW()) DESC
-      LIMIT 20
-    `;
+    if (hasIsReadColumn) {
+      alerts = await sql`
+        SELECT id, employee_id, alert_type, title, description, severity, status, metadata, is_read, created_at, sent_at
+        FROM alerts
+        WHERE employee_id = ${user.sub}
+        ORDER BY COALESCE(sent_at, created_at, NOW()) DESC
+        LIMIT 20
+      `;
+    } else {
+      alerts = await sql`
+        SELECT id, employee_id, alert_type, title, description, severity, status, metadata, created_at, sent_at
+        FROM alerts
+        WHERE employee_id = ${user.sub}
+        ORDER BY COALESCE(sent_at, created_at, NOW()) DESC
+        LIMIT 20
+      `;
+    }
   } else {
     alerts = await sql`
       SELECT id, from_user_id, to_user_id, message, is_read, sent_at, created_at

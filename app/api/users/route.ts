@@ -73,9 +73,6 @@ export async function POST(req: NextRequest) {
 
   const { name, email: rawEmail, role, departmentId, password } = await req.json();
   const email = String(rawEmail || '').trim().toLowerCase();
-  console.log('Create User Request');
-  console.log('Auth User:', authUser);
-  console.log('Can Manage:', canManageUsers(authUser.role));
   if (!name || !email || !role || !password) {
     return err('name, email, role, and password are required');
   }

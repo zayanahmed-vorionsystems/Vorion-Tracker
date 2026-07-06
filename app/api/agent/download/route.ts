@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAuth } from '@/lib/api';
 
 const downloadUrls: Record<string, string | undefined> = {
   win: process.env.NEXT_PUBLIC_AGENT_WIN_URL,
@@ -13,6 +14,9 @@ const fileNames: Record<string, string> = {
 };
 
 export async function GET(req: NextRequest) {
+  const user = requireAuth(req);
+  if ('status' in user) return user;
+
   const platform = req.nextUrl.searchParams.get('platform')?.toLowerCase();
   if (!platform) {
     return NextResponse.json({ error: 'Missing platform query param' }, { status: 400 });

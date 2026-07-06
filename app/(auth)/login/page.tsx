@@ -6,7 +6,7 @@ import { useAuthStore } from '@/store/auth';
 import Image from "next/image";
 import logo from '@/public/vorion-logo-light.png';
 export default function LoginPage() {
-  const [email,    setEmail]    = useState('admin@company.com');
+  const [email,    setEmail]    = useState('');
   const [password, setPassword] = useState('');
   const [error,    setError]    = useState('');
   const [loading,  setLoading]  = useState(false);
@@ -33,16 +33,6 @@ export default function LoginPage() {
       color: '#F8FAFC',
     }}>
       {/* Overrides Chrome/Edge's default white autofill background on inputs */}
-      <style>{`
-        input:-webkit-autofill,
-        input:-webkit-autofill:hover,
-        input:-webkit-autofill:focus {
-          -webkit-text-fill-color: #F8FAFC !important;
-          -webkit-box-shadow: 0 0 0px 1000px rgba(20,26,40,1) inset !important;
-          box-shadow: 0 0 0px 1000px rgba(20,26,40,1) inset !important;
-          caret-color: #F8FAFC !important;
-        }
-      `}</style>
       <div style={{
         background: 'rgba(11,15,26,.82)', border: '1px solid rgba(248,250,252,.10)',
         backdropFilter: 'blur(16px)', borderRadius: 20,
@@ -65,7 +55,7 @@ export default function LoginPage() {
 
         <form onSubmit={handleLogin}>
           <label style={{ fontSize: 11, fontWeight: 600, display: 'block', marginBottom: 5, color: 'rgba(248,250,252,.6)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Email</label>
-          <input type="email" required value={email} onChange={e => setEmail(e.target.value)} autoFocus style={{
+          <input type="email" required value={email} onChange={e => setEmail(e.target.value)} autoFocus autoComplete="username" style={{
             width: '100%', padding: '10px 12px', borderRadius: 12,
             border: '1px solid rgba(248,250,252,.12)', background: 'rgba(248,250,252,.05)',
             color: '#F8FAFC', fontSize: 13, marginBottom: 14, outline: 'none',
@@ -73,7 +63,7 @@ export default function LoginPage() {
           }}/>
 
           <label style={{ fontSize: 11, fontWeight: 600, display: 'block', marginBottom: 5, color: 'rgba(248,250,252,.6)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Password</label>
-          <input type="password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" style={{
+          <input type="password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" autoComplete="current-password" style={{
             width: '100%', padding: '10px 12px', borderRadius: 12,
             border: '1px solid rgba(248,250,252,.12)', background: 'rgba(248,250,252,.05)',
             color: '#F8FAFC', fontSize: 13, marginBottom: 18, outline: 'none',
@@ -96,10 +86,6 @@ export default function LoginPage() {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-
-        <p style={{ fontSize: 11, color: 'rgba(248,250,252,.2)', textAlign: 'center', marginTop: 22 }}>
-          Default: admin@vorion.com / admin123
-        </p>
       </div>
     </div>
   );

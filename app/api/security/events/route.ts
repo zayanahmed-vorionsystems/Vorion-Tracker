@@ -9,8 +9,12 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
+    const targetEmployeeId =
+      ['super_admin', 'admin', 'qa_manager', 'team_lead'].includes(user.role)
+        ? body?.employee_id || body?.employeeId || user.sub || null
+        : user.sub || null;
     const event = await createSecurityEvent({
-      employeeId: body?.employee_id || body?.employeeId || user.sub || null,
+      employeeId: targetEmployeeId,
       computerName: body?.computer_name || body?.computerName || null,
       eventType: String(body?.event_type || body?.eventType || '').trim(),
       value: body?.value ? String(body.value) : null,

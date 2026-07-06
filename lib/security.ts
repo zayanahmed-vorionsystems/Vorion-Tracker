@@ -238,7 +238,7 @@ export async function createSecurityEvent(input: { employeeId: string | null; co
   };
 }
 
-export async function listSecurityEvents(options: { employeeId?: string | null; date?: string | null; eventType?: string | null; limit?: number | null; viewAs?: string | null }): Promise<SecurityEventRecord[]> {
+export async function listSecurityEvents(options: { employeeId?: string | null; date?: string | null; eventType?: string | null; limit?: number | null; viewAs?: string | null; departmentId?: string | null }): Promise<SecurityEventRecord[]> {
   await ensureSecuritySchema();
   const limit = options.limit ? Math.min(Number(options.limit), 100) : 20;
   const rows = await sql`
@@ -250,7 +250,8 @@ export async function listSecurityEvents(options: { employeeId?: string | null; 
       se.target,
       se.action,
       se.created_at,
-      p.full_name AS employee_name
+      p.full_name AS employee_name,
+      p.department_id
     FROM security_events se
     LEFT JOIN public.profiles p ON p.id = se.employee_id
     ORDER BY se.created_at DESC
@@ -260,6 +261,7 @@ export async function listSecurityEvents(options: { employeeId?: string | null; 
   const filtered = (rows || []).filter((row: any) => {
     if (options.viewAs === 'employee' && options.employeeId && row.employee_id !== options.employeeId) return false;
     if (options.employeeId && row.employee_id !== options.employeeId) return false;
+    if (options.departmentId && row.department_id !== options.departmentId) return false;
     if (options.eventType && row.type !== options.eventType) return false;
     if (options.date && new Date(row.created_at).toISOString().slice(0, 10) !== options.date) return false;
     return true;

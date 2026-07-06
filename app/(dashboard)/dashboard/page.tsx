@@ -203,6 +203,7 @@ export default function DashboardPage() {
       .then(d => {
         const normalized = (Array.isArray(d?.rows) ? d.rows : []).map((r: any) => ({
           ...r,
+          current_status: normalizeStatus(r.current_status),
           total_seconds:    Number(r.total_seconds)    || 0,
           screenshot_count: Number(r.screenshot_count) || 0,
           avg_activity_pct: r.avg_activity_pct == null ? null : Number(r.avg_activity_pct),
@@ -217,7 +218,7 @@ export default function DashboardPage() {
         setRows([]);
         setLoading(false);
       });
-  }, [date, token]);
+  }, [date, token, normalizeStatus]);
 
   // Initial fetch whenever date or token changes
   useEffect(() => {

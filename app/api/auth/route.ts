@@ -7,6 +7,51 @@ import { requireAuth, ok, err } from '@/lib/api';
 // This route depends on runtime env/DB state — never statically evaluate it.
 export const dynamic = 'force-dynamic';
 
+const LOGIN_WINDOW_MS = 10 * 60 * 1000;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000;
+const MAX_LOGIN_ATTEMPTS = 5;
+
+type LoginAttemptState = {
+  count: number;
+  firstAttemptAt: number;
+  lockedUntil: number;
+};
+
+const loginAttempts = new Map<string, LoginAttemptState>();
+
+function getClientIdentifier(req: NextRequest) {
+  const forwardedFor = req.headers.get('x-forwarded-for');
+  const firstForwarded = forwardedFor?.split(',')[0]?.trim();
+  return firstForwarded || req.headers.get('x-real-ip') || 'unknown';
+}
+
+function getLoginKey(req: NextRequest, email: string) {
+  return `${getClientIdentifier(req)}:${email}`;
+}
+
+function getActiveAttemptState(key: string, now: number) {
+  const current = loginAttempts.get(key);
+  if (!current) return null;
+  if (current.lockedUntil > now) return current;
+  if (now - current.firstAttemptAt > LOGIN_WINDOW_MS) {
+    loginAttempts.delete(key);
+    return null;
+  }
+  return current;
+}
+
+function recordFailedLogin(key: string, now: number) {
+  const existing = getActiveAttemptState(key, now);
+  const nextCount = (existing?.count || 0) + 1;
+  const nextState: LoginAttemptState = {
+    count: nextCount,
+    firstAttemptAt: existing?.firstAttemptAt || now,
+    lockedUntil: nextCount >= MAX_LOGIN_ATTEMPTS ? now + LOGIN_LOCKOUT_MS : 0,
+  };
+  loginAttempts.set(key, nextState);
+  return nextState;
+}
+
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
@@ -58,14 +103,22 @@ export async function POST(req: NextRequest) {
   const { email: rawEmail, password } = body;
   const email = String(rawEmail || '').trim().toLowerCase();
   if (!email || !password) return err('Email and password required');
+  const now = Date.now();
+  const loginKey = getLoginKey(req, email);
+  const currentAttempt = getActiveAttemptState(loginKey, now);
+  if (currentAttempt?.lockedUntil && currentAttempt.lockedUntil > now) {
+    return err('Too many login attempts. Please try again later.', 429);
+  }
 
   // 1. Verify credentials via Supabase Auth
   const { data: authData, error: authError } =
     await admin.auth.signInWithPassword({ email, password });
 
   if (authError || !authData?.user) {
+    recordFailedLogin(loginKey, now);
     return err('Invalid credentials', 401);
   }
+  loginAttempts.delete(loginKey);
 
   // 2. Fetch profile from public.profiles
   let profile;
