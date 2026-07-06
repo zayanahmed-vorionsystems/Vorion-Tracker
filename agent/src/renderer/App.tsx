@@ -180,54 +180,70 @@ export default function App() {
   }, [employeeId]);
 
   return (
-    <div style={{ fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif', minHeight:'100vh', background:'#f8fafc', padding:20 }}>
-      <div style={{ maxWidth:420, margin:'0 auto', background:'#fff', borderRadius:24, padding:28, boxShadow:'0 24px 80px rgba(15,23,42,.08)' }}>
-        <h1 style={{ margin:0, fontSize:26, fontWeight:700, color:'#0f172a' }}>WorkTrack</h1>
-        <p style={{ margin:'10px 0 22px', color:'#64748b', lineHeight:1.6 }}>Employee mode: work status, timer, break controls and checkout. Tracking runs silently in background.</p>
+    <div style={{ fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif', minHeight:'100vh', background:'radial-gradient(circle at top, #1f2937 0%, #05070b 70%, #020304 100%)', padding:20, color:'#f8fafc' }}>
+      <div style={{ maxWidth:480, margin:'0 auto', background:'linear-gradient(145deg, rgba(15,23,42,0.96), rgba(3,7,18,0.98))', borderRadius:28, padding:28, boxShadow:'0 0 0 1px rgba(255,255,255,0.06), 0 20px 70px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.06)' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, marginBottom:8 }}>
+          <div>
+            <h1 style={{ margin:0, fontSize:26, fontWeight:700, color:'#f8fafc', textShadow:'0 0 12px rgba(248,250,252,0.16)' }}>WorkTrack</h1>
+            <p style={{ margin:'8px 0 0', color:'#94a3b8', lineHeight:1.5 }}>Employee mode: check-in, break controls, and checkout from one place.</p>
+          </div>
+          {loggedIn && (
+            <button onClick={async () => {
+              await window.agent?.logout();
+              setLoggedIn(false);
+              setUserName('');
+              setLoggedEmail('');
+              setStatus('offline');
+              setElapsed('00:00:00');
+            }} style={{ border:'1px solid rgba(255,255,255,0.14)', borderRadius:999, background:'rgba(255,255,255,0.04)', color:'#f8fafc', padding:'8px 12px', cursor:'pointer', fontSize:12, fontWeight:700, boxShadow:'inset 0 1px 0 rgba(255,255,255,0.06)' }}>
+              Logout
+            </button>
+          )}
+        </div>
 
         {loggedIn ? (
           <>
-            <div style={{ marginBottom:20, padding:20, borderRadius:20, background:'#f8fafc', border:'1px solid #e2e8f0' }}>
+            <div style={{ marginBottom:20, padding:20, borderRadius:20, background:'rgba(248,250,252,0.04)', border:'1px solid rgba(255,255,255,0.08)', boxShadow:'inset 0 1px 0 rgba(255,255,255,0.05)' }}>
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
                 <div>
-                  <div style={{ fontSize:12, fontWeight:600, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.08em' }}>Status</div>
-                  <div style={{ fontSize:22, fontWeight:700, color:'#0f172a' }}>{LABELS[status]}</div>
+                  <div style={{ fontSize:12, fontWeight:600, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.08em' }}>Status</div>
+                  <div style={{ fontSize:22, fontWeight:700, color:'#f8fafc' }}>{LABELS[status]}</div>
                 </div>
                 <div style={{ textAlign:'right' }}>
-                  <div style={{ fontSize:11, color:'#64748b' }}>Heartbeat</div>
-                  <div style={{ fontSize:14, fontWeight:600, color:'#0f172a' }}>{heartbeat || '--:--:--'}</div>
+                  <div style={{ fontSize:11, color:'#94a3b8' }}>Heartbeat</div>
+                  <div style={{ fontSize:14, fontWeight:600, color:'#f8fafc' }}>{heartbeat || '--:--:--'}</div>
                 </div>
               </div>
               <div style={{ display:'grid', gap:10, marginTop:10 }}>
-                <div style={{ padding:'14px 16px', borderRadius:16, background:'#fff', border:'1px solid #e2e8f0' }}>
-                  <div style={{ fontSize:11, color:'#64748b', marginBottom:6 }}>Session timer</div>
-                  <div style={{ fontSize:28, fontWeight:700, color:'#0f172a' }}>{elapsed}</div>
+                <div style={{ padding:'14px 16px', borderRadius:16, background:'rgba(255,255,255,0.05)', border:'1px solid rgba(255,255,255,0.08)', boxShadow:'inset 0 1px 0 rgba(255,255,255,0.05)' }}>
+                  <div style={{ fontSize:11, color:'#94a3b8', marginBottom:6 }}>Session timer</div>
+                  <div style={{ fontSize:28, fontWeight:700, color:'#f8fafc' }}>{elapsed}</div>
                 </div>
                 <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
-                  <span style={{ padding:'8px 12px', borderRadius:999, background: idle ? '#fef3c7' : '#d1fae5', color: idle ? '#b45309' : '#166534', fontSize:12, fontWeight:700 }}>{idle ? 'Idle' : 'Active'}</span>
-                  <span style={{ padding:'8px 12px', borderRadius:999, background:'#e2e8f0', color:'#475569', fontSize:12 }}>Tracking background tasks</span>
+                  <span style={{ padding:'8px 12px', borderRadius:999, background: idle ? 'rgba(245,158,11,0.18)' : 'rgba(34,197,94,0.18)', color: idle ? '#fde68a' : '#bbf7d0', fontSize:12, fontWeight:700, border:'1px solid rgba(255,255,255,0.08)' }}>{idle ? 'Idle' : 'Active'}</span>
+                  <span style={{ padding:'8px 12px', borderRadius:999, background:'rgba(255,255,255,0.05)', color:'#cbd5e1', fontSize:12, border:'1px solid rgba(255,255,255,0.08)' }}>Tracking background tasks</span>
                 </div>
               </div>
             </div>
 
-            <div style={{ marginBottom:16, padding:'14px 16px', borderRadius:16, background:'#fff', border:'1px solid #e2e8f0' }}>
+            <div style={{ marginBottom:16, padding:'14px 16px', borderRadius:16, background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', boxShadow:'inset 0 1px 0 rgba(255,255,255,0.05)' }}>
               <div style={{ display:'flex', justifyContent:'space-between', gap:8, alignItems:'center', marginBottom:8 }}>
                 <div>
-                  <div style={{ fontSize:13, fontWeight:700, color:'#0f172a' }}>{userName || 'Employee'}</div>
-                  <div style={{ fontSize:12, color:'#64748b' }}>{loggedEmail || 'Signed in user'}</div>
+                  <div style={{ fontSize:13, fontWeight:700, color:'#f8fafc' }}>{userName || 'Employee'}</div>
+                  <div style={{ fontSize:12, color:'#94a3b8' }}>{loggedEmail || 'Signed in user'}</div>
                 </div>
-                <button onClick={() => setAlertsOpen((prev) => !prev)} style={{ border:'1px solid #cbd5e1', borderRadius:999, background:'#f8fafc', color:'#0f172a', padding:'8px 12px', cursor:'pointer', fontSize:12, fontWeight:700 }}>
+                <button onClick={() => setAlertsOpen((prev) => !prev)} style={{ border:'1px solid rgba(255,255,255,0.14)', borderRadius:999, background:'rgba(255,255,255,0.04)', color:'#f8fafc', padding:'8px 12px', cursor:'pointer', fontSize:12, fontWeight:700 }}>
                   Messages {unreadCount > 0 ? `(${unreadCount})` : ''}
                 </button>
               </div>
               {alertsOpen && (
                 <div style={{ marginTop:12, display:'grid', gap:8 }}>
                   {alerts.length === 0 ? (
-                    <div style={{ fontSize:12, color:'#64748b' }}>No messages yet.</div>
+                    <div style={{ fontSize:12, color:'#94a3b8' }}>No messages yet.</div>
                   ) : alerts.map((alert) => (
-                    <button key={alert.id} onClick={() => markAlertRead(alert.id)} style={{ textAlign:'left', border:'1px solid #e2e8f0', borderRadius:12, padding:10, background: alert.isRead ? '#fff' : '#fef3c7', cursor:'pointer' }}>
-                      <div style={{ fontSize:12, fontWeight:700, color:'#0f172a' }}>{alert.title}</div>
-                      <div style={{ fontSize:11, color:'#64748b', marginTop:4 }}>{alert.description}</div>
+                    <button key={alert.id} onClick={() => markAlertRead(alert.id)} style={{ textAlign:'left', border:'1px solid rgba(255,255,255,0.08)', borderRadius:12, padding:10, background: alert.isRead ? 'rgba(255,255,255,0.04)' : 'rgba(248,208,0,0.14)', cursor:'pointer' }}>
+                      <div style={{ fontSize:12, fontWeight:700, color:'#f8fafc' }}>{alert.title}</div>
+                      <div style={{ fontSize:11, color:'#cbd5e1', marginTop:4 }}>{alert.description}</div>
                     </button>
                   ))}
                 </div>
@@ -235,18 +251,12 @@ export default function App() {
             </div>
 
             <div style={{ display:'grid', gap:12 }}>
-              <button onClick={() => window.agent?.startWork()} style={{ width:'100%', padding:16, borderRadius:16, border:'none', background:'#0f172a', color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer' }}>Start Work</button>
-              <button onClick={() => window.agent?.startBreak()} style={{ width:'100%', padding:16, borderRadius:16, border:'1px solid #cbd5e1', background:'#fff', color:'#0f172a', fontSize:15, fontWeight:700, cursor:'pointer' }}>Start Break</button>
-              <button onClick={() => window.agent?.endBreak()} style={{ width:'100%', padding:16, borderRadius:16, border:'1px solid #cbd5e1', background:'#fff', color:'#0f172a', fontSize:15, fontWeight:700, cursor:'pointer' }}>End Break</button>
-              <button onClick={() => window.agent?.checkout()} style={{ width:'100%', padding:16, borderRadius:16, border:'none', background:'#ef4444', color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer' }}>Check Out</button>
-              <button onClick={async () => {
-                await window.agent?.logout();
-                setLoggedIn(false);
-                setUserName('');
-                setLoggedEmail('');
-                setStatus('offline');
-                setElapsed('00:00:00');
-              }} style={{ width:'100%', padding:16, borderRadius:16, border:'1px solid #cbd5e1', background:'#fff', color:'#0f172a', fontSize:15, fontWeight:700, cursor:'pointer' }}>Logout</button>
+              <button onClick={() => window.agent?.startWork()} style={{ width:'100%', padding:16, borderRadius:16, border:'1px solid rgba(248,208,0,0.25)', background:'linear-gradient(135deg, #111827 0%, #1f2937 100%)', color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer', boxShadow:'0 0 16px rgba(248,208,0,0.16)' }}>Check In</button>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+                <button onClick={() => window.agent?.startBreak()} style={{ width:'100%', padding:14, borderRadius:16, border:'1px solid rgba(255,255,255,0.12)', background:'rgba(255,255,255,0.05)', color:'#f8fafc', fontSize:14, fontWeight:700, cursor:'pointer' }}>Start Break</button>
+                <button onClick={() => window.agent?.endBreak()} style={{ width:'100%', padding:14, borderRadius:16, border:'1px solid rgba(255,255,255,0.12)', background:'rgba(255,255,255,0.04)', color:'#f8fafc', fontSize:14, fontWeight:700, cursor:'pointer' }}>End Break</button>
+              </div>
+              <button onClick={() => window.agent?.checkout()} style={{ width:'100%', padding:16, borderRadius:16, border:'1px solid rgba(255,92,122,0.25)', background:'linear-gradient(135deg, #7f1d1d 0%, #ef4444 100%)', color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer', boxShadow:'0 0 16px rgba(239,68,68,0.16)' }}>Checkout</button>
             </div>
 
             <p style={{ marginTop:22, fontSize:12, color:'#64748b', lineHeight:1.75 }}>Signed in as {userName}. Screenshots every 2 seconds, active app tracking, heartbeat, and agent status are emitted to the admin dashboard in real time.</p>
@@ -254,14 +264,14 @@ export default function App() {
         ) : (
           <div style={{ display:'grid', gap:12 }}>
             <div style={{ padding:'20px', borderRadius:20, background:'#f8fafc', border:'1px solid #e2e8f0' }}>
-              <div style={{ fontSize:14, fontWeight:700, marginBottom:12, color:'#0f172a' }}>Employee sign in</div>
+              <div style={{ fontSize:14, fontWeight:700, marginBottom:12, color:'#f8fafc' }}>Employee sign in</div>
               <label style={{ display:'block', marginBottom:10, color:'#475569' }}>
                 Email
-                <input value={email} onChange={e => setEmail(e.target.value)} style={{ width:'100%', marginTop:8, padding:'12px', borderRadius:12, border:'1px solid #cbd5e1' }} />
+                <input value={email} onChange={e => setEmail(e.target.value)} style={{ width:'100%', marginTop:8, padding:'12px', borderRadius:12, border:'1px solid rgba(255,255,255,0.16)', background:'rgba(255,255,255,0.04)', color:'#f8fafc' }} />
               </label>
               <label style={{ display:'block', marginBottom:10, color:'#475569' }}>
                 Password
-                <input type='password' value={password} onChange={e => setPassword(e.target.value)} style={{ width:'100%', marginTop:8, padding:'12px', borderRadius:12, border:'1px solid #cbd5e1' }} />
+                <input type='password' value={password} onChange={e => setPassword(e.target.value)} style={{ width:'100%', marginTop:8, padding:'12px', borderRadius:12, border:'1px solid rgba(255,255,255,0.16)', background:'rgba(255,255,255,0.04)', color:'#f8fafc' }} />
               </label>
               {loginError && <div style={{ color:'#b91c1c', marginBottom:10 }}>{loginError}</div>}
               <button onClick={async () => {
@@ -275,7 +285,7 @@ export default function App() {
                 } else {
                   setLoginError(result?.error || 'Login failed');
                 }
-              }} style={{ width:'100%', padding:16, borderRadius:16, border:'none', background:'#0f172a', color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer' }}>Sign in</button>
+              }} style={{ width:'100%', padding:16, borderRadius:16, border:'1px solid rgba(248,208,0,0.25)', background:'linear-gradient(135deg, #111827 0%, #1f2937 100%)', color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer', boxShadow:'0 0 16px rgba(248,208,0,0.16)' }}>Sign in</button>
             </div>
           </div>
         )}

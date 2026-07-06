@@ -711,7 +711,7 @@ function updateTray() {
 // ─── Window ─────────────────────────────────────────────────────────────────
 async function createWindow() {
   mainWindow = new BrowserWindow({
-    width:380, height:560, resizable:false,
+    width:460, height:760, resizable:true,
     title:'WorkTrack Agent',
     webPreferences:{ preload:path.join(__dirname,'preload.js'), contextIsolation:true, nodeIntegration:false },
     show: true,
