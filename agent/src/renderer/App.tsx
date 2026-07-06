@@ -263,17 +263,17 @@ export default function App() {
           </>
         ) : (
           <div style={{ display:'grid', gap:12 }}>
-            <div style={{ padding:'20px', borderRadius:20, background:'#f8fafc', border:'1px solid #e2e8f0' }}>
-              <div style={{ fontSize:14, fontWeight:700, marginBottom:12, color:'#f8fafc' }}>Employee sign in</div>
-              <label style={{ display:'block', marginBottom:10, color:'#475569' }}>
-                Email
-                <input value={email} onChange={e => setEmail(e.target.value)} style={{ width:'100%', marginTop:8, padding:'12px', borderRadius:12, border:'1px solid rgba(255,255,255,0.16)', background:'rgba(255,255,255,0.04)', color:'#f8fafc' }} />
+            <div style={{ padding:'22px', borderRadius:20, background:'rgba(248,250,252,0.04)', border:'1px solid rgba(255,255,255,0.08)', boxShadow:'inset 0 1px 0 rgba(255,255,255,0.05)' }}>
+              <div style={{ fontSize:15, fontWeight:700, marginBottom:14, color:'#f8fafc' }}>Employee sign in</div>
+              <label style={{ display:'block', marginBottom:14, color:'#cbd5e1', fontSize:13, fontWeight:600 }}>
+                <span style={{ display:'block', marginBottom:8 }}>Email</span>
+                <input value={email} onChange={e => setEmail(e.target.value)} placeholder="Enter your email" style={{ width:'100%', marginTop:0, padding:'12px 14px', borderRadius:12, border:'1px solid rgba(255,255,255,0.14)', background:'rgba(255,255,255,0.06)', color:'#f8fafc', outline:'none', fontSize:13, boxSizing:'border-box' }} />
               </label>
-              <label style={{ display:'block', marginBottom:10, color:'#475569' }}>
-                Password
-                <input type='password' value={password} onChange={e => setPassword(e.target.value)} style={{ width:'100%', marginTop:8, padding:'12px', borderRadius:12, border:'1px solid rgba(255,255,255,0.16)', background:'rgba(255,255,255,0.04)', color:'#f8fafc' }} />
+              <label style={{ display:'block', marginBottom:14, color:'#cbd5e1', fontSize:13, fontWeight:600 }}>
+                <span style={{ display:'block', marginBottom:8 }}>Password</span>
+                <input type='password' value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password" style={{ width:'100%', marginTop:0, padding:'12px 14px', borderRadius:12, border:'1px solid rgba(255,255,255,0.14)', background:'rgba(255,255,255,0.06)', color:'#f8fafc', outline:'none', fontSize:13, boxSizing:'border-box' }} />
               </label>
-              {loginError && <div style={{ color:'#b91c1c', marginBottom:10 }}>{loginError}</div>}
+              {loginError && <div style={{ color:'#fda4af', marginBottom:10, fontSize:12, fontWeight:600 }}>{loginError}</div>}
               <button onClick={async () => {
                 setLoginError('');
                 const result = await window.agent?.login(email, password);
