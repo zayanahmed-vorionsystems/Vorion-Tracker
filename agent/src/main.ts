@@ -506,50 +506,80 @@ ipcMain.on('stream:signal-out', (_e, data: { watcherId: string; type: 'offer' | 
 });
 
 // ─── Socket ─────────────────────────────────────────────────────────────────
-async function initializeSocket() {
-  let liveWatchInitialized = false;
+// ─── module-level guards (upar kahin, socket declaration ke aas-paas add karo) ──
+let socketInitialized = false;
+let liveWatchStarted  = false;
 
-socket.on('connect', () => {
-  console.log('Socket connected', socket.id);
-  if (employeeId) {
-    socket.emit('register', { role: 'employee', employeeId, token });
+// ─── Socket ─────────────────────────────────────────────────────────────────
+async function initializeSocket() {
+  if (socketInitialized) {
+    // Already wired up — sirf reconnect trigger karo agar disconnected ho
+    if (!socket.connected) socket.connect();
+    return;
   }
-  if (!liveWatchInitialized) {
-    console.log('[AGENT] setupLiveWatch called from main.ts after socket connect', { employeeId });
-    setupLiveWatch(socket, employeeId);
-    liveWatchInitialized = true;
-  } else {
-    console.log('[AGENT] socket reconnected — skipping setupLiveWatch (already initialized)');
-  }
-});
+  socketInitialized = true;
+
+  socket.on('connect', () => {
+    console.log('Socket connected', socket.id);
+    if (employeeId) {
+      socket.emit('register', { role: 'employee', employeeId, token });
+      console.log('Registered with employeeId:', employeeId);
+    }
+
+    if (!liveWatchStarted) {
+      console.log('[AGENT] setupLiveWatch called from main.ts after socket connect', { employeeId });
+      setupLiveWatch(socket, employeeId);
+      liveWatchStarted = true;
+    } else {
+      console.log('[AGENT] socket reconnected — skipping setupLiveWatch (already running)');
+    }
+  });
+
   socket.on('new-alert', async (alert: any) => {
     console.log('🔔 Alert received from server:', alert);
     await persistAlert(alert);
     const { Notification } = await import('electron');
     if (Notification.isSupported()) {
-      const notif = new Notification({ title: alert.title || 'WorkTrack Alert', body: alert.description || alert.message || '', urgency: 'critical' } as any);
+      const notif = new Notification({
+        title: alert.title || 'WorkTrack Alert',
+        body: alert.description || alert.message || '',
+        urgency: 'critical'
+      } as any);
       notif.show();
     }
     mainWindow?.webContents.send('new-alert', alert);
   });
-  socket.on('disconnect', (reason) => { console.log('Socket disconnected', reason); });
+
+  socket.on('disconnect', (reason) => {
+    console.log('Socket disconnected', reason);
+  });
 
   // ── Live streaming signaling ──────────────────────────────────────────
   socket.on('watch-request', ({ watcherId }: { watcherId: string }) => {
     console.log('Watch request received from admin socket', watcherId);
     handleWatchRequest(watcherId);
   });
+
   socket.on('webrtc-answer', ({ watcherId, sdp }: { watcherId: string; sdp: any }) => {
+    console.log('[AGENT] webrtc-answer received for watcher', watcherId);
     streamWindow?.webContents.send('stream:signal-in', { watcherId, type: 'answer', sdp });
   });
+
   socket.on('webrtc-ice-candidate', ({ watcherId, candidate }: { watcherId: string; candidate: any }) => {
+    console.log('[AGENT] ice-candidate received for watcher', watcherId);
     streamWindow?.webContents.send('stream:signal-in', { watcherId, type: 'ice', candidate });
   });
+
   socket.on('stop-watching', ({ watcherId }: { watcherId: string }) => {
+    console.log('[AGENT] stop-watching received for watcher', watcherId);
     handleStopWatching(watcherId);
   });
-}
 
+  // ⚠️ IMPORTANT: agar ye line kahin aur (jaise live-watch.ts) se bhi nahi
+  // chal rahi, to yehi wo jagah hai jahan actual connect() call honi chahiye,
+  // kyunki socket autoConnect:false ke sath banaya gaya hai.
+  socket.connect();
+}
 console.log('WorkTrack agent using SERVER_URL=', SERVER_URL);
 console.log('WorkTrack agent using SOCKET_SERVER_URL=', SOCKET_SERVER_URL);
 
@@ -620,40 +650,33 @@ async function startTracking() {
 
 async function stopTracking() {
   if (!tracking) return;
+
   tracking = false;
+
   await endSession();
-  if (ssInterval)         clearInterval(ssInterval);
-  if (idleInterval)       clearInterval(idleInterval);
-  if (heartbeatInterval)  clearInterval(heartbeatInterval);
-  if (policyInterval)     clearInterval(policyInterval);
-  if (scanInterval)       clearInterval(scanInterval);
+
+  if (ssInterval) clearInterval(ssInterval);
+  if (idleInterval) clearInterval(idleInterval);
+  if (heartbeatInterval) clearInterval(heartbeatInterval);
+  if (policyInterval) clearInterval(policyInterval);
+  if (scanInterval) clearInterval(scanInterval);
   if (policySyncInterval) clearInterval(policySyncInterval);
-  policySyncInterval = null;
-  status = 'offline';
-  async function stopTracking() {
-  if (!tracking) return;
-  tracking = false;
-  await endSession();
-  if (ssInterval)         clearInterval(ssInterval);
-  if (idleInterval)       clearInterval(idleInterval);
-  if (heartbeatInterval)  clearInterval(heartbeatInterval);
-  if (policyInterval)     clearInterval(policyInterval);
-  if (scanInterval)       clearInterval(scanInterval);
-  if (policySyncInterval) clearInterval(policySyncInterval);
-  policySyncInterval = null;
-  status = 'offline';
+
   teardownLiveWatch();
+
   closeAllStreams();
+
+  status = 'offline';
+
   updateTray();
-  mainWindow?.webContents.send('tracking-status', { tracking:false });
+
+  mainWindow?.webContents.send('tracking-status', {
+      tracking:false
+  });
+
   broadcastStatus();
 }
-app.on('before-quit',()=>{ tracking && stopTracking(); teardownLiveWatch(); removeProxyBlock(); });
-  closeAllStreams();
-  updateTray();
-  mainWindow?.webContents.send('tracking-status',{ tracking:false });
-  broadcastStatus();
-}
+
 
 async function watchIdle() {
   const idleSec = powerMonitor.getSystemIdleTime();
@@ -749,7 +772,6 @@ ipcMain.handle('login', async (_e, email:string, password:string) => {
     return { ok:false, error: error?.message || 'Login failed' };
   }
 });
-
 ipcMain.handle('logout', async () => {
   if (token) {
     try { await endSession(); await sessionAction('logout'); }
@@ -759,11 +781,11 @@ ipcMain.handle('logout', async () => {
   token=''; userName=''; employeeId='';
   set('token',''); set('userName',''); set('employeeId','');
   status='offline';
+  liveWatchStarted = false;     // safety net
   mainWindow?.webContents.send('status-changed',{ status:'offline' });
   mainWindow?.show();
   return { ok:true };
 });
-
 ipcMain.handle('get-status',       () => ({ tracking, status, sessionId, userName, captureIntervalSec, idleSec: powerMonitor.getSystemIdleTime(), startedAt: status !== 'offline' ? Date.now() : null }));
 ipcMain.handle('get-alerts',       async () => getStoredAlerts());
 ipcMain.handle('sync-alerts',      async () => syncAlertsWithServer());

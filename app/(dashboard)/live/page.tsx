@@ -299,6 +299,38 @@ export default function LiveMonitorPage() {
     }
   }
 
+  function hasLiveRemoteStream() {
+    const stream = remoteStreamRef.current;
+    if (!stream) return false;
+    return stream.getTracks().some(track => track.readyState === 'live');
+  }
+
+  function hasActivePeerConnection() {
+    const pc = peerRef.current;
+    return Boolean(pc && pc.connectionState !== 'closed' && pc.connectionState !== 'failed');
+  }
+
+  function markStreamActive() {
+    setStreamState('Connected');
+    setIsConnectingStream(false);
+    setIsStreaming(true);
+    setStreamError(null);
+  }
+
+  function attachRemoteStream(stream: MediaStream | null) {
+    if (!stream || !videoRef.current) return;
+    if (videoRef.current.srcObject !== stream) {
+      videoRef.current.srcObject = stream;
+    }
+    void videoRef.current.play().catch((err) => console.warn('[live-monitor] autoplay failed', err));
+  }
+
+  useEffect(() => {
+    if (!selectedEmployee?.id || !hasLiveRemoteStream()) return;
+    attachRemoteStream(remoteStreamRef.current);
+    markStreamActive();
+  }, [selectedEmployee?.id, isEnlarged]);
+
   function scheduleReconnect(reason: string) {
     if (!selectedEmployeeRef.current || !socketRef.current || !activeEmployeeRef.current) return;
     if (reconnectTimeoutRef.current) return;
@@ -320,10 +352,8 @@ export default function LiveMonitorPage() {
       console.log('[live-monitor] ontrack fired', { streamCount: event.streams.length, trackKind: event.track.kind });
       const stream = event.streams[0];
       remoteStreamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch((err) => console.warn('[live-monitor] autoplay failed', err));
-      }
+      attachRemoteStream(stream);
+      markStreamActive();
       if (isRecording) {
         stopRecording();
       }
@@ -401,7 +431,16 @@ export default function LiveMonitorPage() {
     if (!socketRef.current) return;
 
     clearReconnectTimer();
-    if (peerRef.current) {
+    if (activeEmployeeRef.current === employeeId && hasLiveRemoteStream() && hasActivePeerConnection()) {
+      setSelectedEmployee({ id: employeeId, name: employeeName });
+      selectedEmployeeRef.current = { id: employeeId, name: employeeName };
+      activeEmployeeRef.current = employeeId;
+      attachRemoteStream(remoteStreamRef.current);
+      markStreamActive();
+      return;
+    }
+
+    if (peerRef.current && hasActivePeerConnection()) {
       peerRef.current.close();
       peerRef.current = null;
     }
@@ -539,6 +578,10 @@ export default function LiveMonitorPage() {
   }
 
   function toggleEnlarge() {
+    if (hasLiveRemoteStream()) {
+      attachRemoteStream(remoteStreamRef.current);
+      markStreamActive();
+    }
     setIsEnlarged(prev => !prev);
   }
 
