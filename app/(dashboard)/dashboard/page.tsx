@@ -1,6 +1,7 @@
 'use client';
 // app/(dashboard)/dashboard/page.tsx
 import { useEffect, useState, useCallback } from 'react';
+import { io } from 'socket.io-client';
 import { useAuthStore } from '@/store/auth';
 import { fmtCompact, fmtPrecise, timeAgo } from './timeUtils';
 
@@ -8,6 +9,10 @@ function fmt(secs: number) {
   if (!secs) return '0h 0m';
   return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
 }
+
+const SOCKET_SERVER_URL = (typeof window !== 'undefined' && window.location?.origin)
+  ? `${window.location.protocol}//${window.location.hostname}:4000`
+  : 'http://127.0.0.1:4000';
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
@@ -156,6 +161,31 @@ export default function DashboardPage() {
     } catch {}
   }, []);
 
+  const normalizeStatus = useCallback((value?: string | null) => {
+    const raw = String(value || '').toLowerCase();
+    if (raw === 'active' || raw === 'working') return 'working';
+    if (raw === 'break' || raw === 'on_break') return 'on_break';
+    if (raw === 'checked_out' || raw === 'checkout' || raw === 'check_out') return 'checked_out';
+    if (raw === 'offline' || raw === 'idle') return 'offline';
+    return raw || 'offline';
+  }, []);
+
+  const updateRowFromSocket = useCallback((payload: any) => {
+    const employeeId = payload?.employeeId || payload?.userId;
+    if (!employeeId) return;
+
+    const nextStatus = normalizeStatus(payload?.status);
+    setRows(prev => prev.map((row) => {
+      if (String(row.id) !== String(employeeId)) return row;
+      return {
+        ...row,
+        current_status: nextStatus,
+        last_active: payload?.lastActivity || payload?.timestamp || row.last_active,
+        current_app: payload?.currentApp ?? row.current_app,
+      };
+    }));
+  }, [normalizeStatus]);
+
   // ── Fetch logic extracted into a stable callback ──────────────────────
   const fetchData = useCallback(() => {
     if (!token) return;
@@ -200,6 +230,29 @@ export default function DashboardPage() {
     const id = setInterval(fetchData, 60_000);
     return () => clearInterval(id);
   }, [fetchData]);
+
+  // ── Live status updates from the socket server ────────────────────────
+  useEffect(() => {
+    if (!token || !user?.id) return;
+
+    const socket = io(SOCKET_SERVER_URL, {
+      transports: ['websocket', 'polling'],
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+    });
+
+    socket.on('connect', () => {
+      socket.emit('register', { role: user?.role || 'admin', employeeId: user?.id || null, token });
+    });
+
+    socket.on('employee-status', updateRowFromSocket);
+
+    return () => {
+      try {
+        socket.disconnect();
+      } catch {}
+    };
+  }, [token, user?.id, user?.role, updateRowFromSocket]);
 
   // ── Derived stats ─────────────────────────────────────────────────────
   const active   = rows.filter(r => r.current_status === 'working' || r.current_status === 'on_break').length;
@@ -358,7 +411,7 @@ style={{
                       : 'none',
                     transition: 'background .15s',
                   }}
-                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(248,250,252,.03)')}
+                  onMouseEnter={e => (e.currentTarget.style.background='rgba(255,255,255,.05)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 >
                   {/* Name */}
