@@ -9,7 +9,7 @@ let listenersBound = false;
 let socketListenersBound = false;
 let windowReadyPromise: Promise<void> | null = null;
 let captureWindowReady = false;
-
+console.log("========== LIVE WATCH BUILD 123456 ==========");
 function logErrorWithStack(message: string, error: unknown) {
   console.error(message);
   if (error instanceof Error) {
@@ -22,6 +22,8 @@ function logErrorWithStack(message: string, error: unknown) {
 }
 
 function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> } {
+  console.log("[MAIN] getOrCreateCaptureWindow() called");
+
   if (captureWindow && !captureWindow.isDestroyed() && windowReadyPromise) {
     return { win: captureWindow, ready: windowReadyPromise };
   }
@@ -32,7 +34,12 @@ function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> 
     path.join(process.resourcesPath || __dirname, 'app.asar', 'dist', 'capture.html'),
   ].filter((candidate, index, list) => list.indexOf(candidate) === index);
   const captureHtmlPath = candidateHtmlPaths.find((candidate) => fs.existsSync(candidate)) || candidateHtmlPaths[0];
+  console.log("[MAIN] captureHtmlPath =", captureHtmlPath);
 
+  console.log(
+    "[MAIN] renderer exists =",
+    fs.existsSync(path.join(path.dirname(captureHtmlPath), "capture-renderer.js"))
+  );
   console.log('[AGENT][2] capture window created', {
     captureHtmlPath,
     captureHtmlExists: fs.existsSync(captureHtmlPath),
@@ -95,15 +102,22 @@ function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> 
     });
   });
   windowReadyPromise = ready;
-
+  captureWindowReady = false;
   win.loadFile(captureHtmlPath).catch((err) => {
-    if (win.isDestroyed()) {
-      console.log('[AGENT][ERR] capture window was closed before load completed');
-      return;
-    }
-    logErrorWithStack('[AGENT][ERR] Failed to load capture window', err);
-    console.error('[AGENT][ERR] capture window load context', { captureHtmlPath });
+  if (win.isDestroyed()) {
+    console.log('[AGENT][ERR] capture window was closed before load completed');
+    return;
+  }
+
+  logErrorWithStack(
+    '[AGENT][ERR] Failed to load capture window',
+    err
+  );
+
+  console.error('[AGENT][ERR] capture window load context', {
+    captureHtmlPath,
   });
+});
 
   return { win, ready };
 }
@@ -114,45 +128,63 @@ async function sendStartCapture(win: BrowserWindow) {
     types: ['screen'],
     thumbnailSize: { width: 1280, height: 720 },
   });
+
   const primary = sources[0];
+
   if (!primary) {
-    logErrorWithStack('[AGENT][ERR] no desktop sources available', new Error('No desktop sources available'));
+    logErrorWithStack(
+      '[AGENT][ERR] no desktop sources available',
+      new Error('No desktop sources available')
+    );
     return;
   }
 
   if (win.isDestroyed()) {
-    console.warn('[MAIN] capture window destroyed before start-capture could be sent');
+    console.warn(
+      '[MAIN] capture window destroyed before start-capture could be sent'
+    );
     return;
   }
 
-  console.log('[AGENT][6] desktopCapturer.getSources success', { sourceId: primary.id, totalSources: sources.length });
-  const ready = await new Promise<boolean>((resolve) => {
-    if (captureWindowReady) {
-      resolve(true);
+  console.log('[AGENT][6] desktopCapturer.getSources success', {
+    sourceId: primary.id,
+    totalSources: sources.length,
+  });
+
+  // Wait until renderer has reported ready
+  const start = Date.now();
+
+  while (!captureWindowReady) {
+    if (Date.now() - start > 5000) {
+      console.error(
+        '[MAIN] capture window did not report ready before start-capture'
+      );
       return;
     }
 
-    const onReady = () => {
-      ipcMain.removeListener('live-watch:ready', onReady);
-      resolve(true);
-    };
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
 
-    const timeout = setTimeout(() => {
-      ipcMain.removeListener('live-watch:ready', onReady);
-      resolve(false);
-    }, 5000);
+  console.log('[MAIN] capture window is ready');
 
-    ipcMain.once('live-watch:ready', onReady);
-  });
-
-  if (!ready) {
-    console.error('[MAIN] capture window did not report ready before start-capture');
+  if (win.isDestroyed()) {
+    console.warn('[MAIN] capture window destroyed after waiting');
     return;
   }
 
-  console.log('[AGENT][live-watch] before send start-capture to hidden capture window', { sourceId: primary.id });
-  win.webContents.send('start-capture', { sourceId: primary.id });
-  console.log('[AGENT][live-watch] after send start-capture to hidden capture window', { sourceId: primary.id });
+  console.log(
+    '[AGENT][live-watch] before send start-capture to hidden capture window',
+    { sourceId: primary.id }
+  );
+
+  win.webContents.send('start-capture', {
+    sourceId: primary.id,
+  });
+
+  console.log(
+    '[AGENT][live-watch] after send start-capture to hidden capture window',
+    { sourceId: primary.id }
+  );
 }
 
 export function setupLiveWatch(socket: Socket, employeeId: string) {
@@ -165,11 +197,18 @@ export function setupLiveWatch(socket: Socket, employeeId: string) {
 
       try {
         const { win, ready } = getOrCreateCaptureWindow();
+        console.log("[MAIN] capture window exists:", !!win);
+        console.log("[MAIN] destroyed:", win.isDestroyed());
 
         const loaded = await Promise.race([
           ready.then(() => true),
           new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 8000)),
         ]);
+        console.log("[MAIN] waiting for capture window to finish loading");
+
+        await ready;
+
+        console.log("[MAIN] capture window finished loading");
 
         if (win.isDestroyed()) {
           console.warn('[MAIN] capture window was destroyed while waiting for load — retrying once');
@@ -214,10 +253,10 @@ export function setupLiveWatch(socket: Socket, employeeId: string) {
   if (!listenersBound) {
     listenersBound = true;
 
-    ipcMain.on('live-watch:ready', () => {
-      captureWindowReady = true;
-      console.log('[MAIN] live-watch:ready received from capture window');
-    });
+   ipcMain.on('live-watch:ready', () => {
+  console.log('[MAIN] live-watch:ready received from capture window');
+  captureWindowReady = true;
+});
 
     ipcMain.on('live-watch:offer', (_event, { sdp }) => {
       console.log('[AGENT][live-watch] live-watch:offer received', {

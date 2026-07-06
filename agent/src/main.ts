@@ -1,6 +1,7 @@
 // agent/src/main.ts  — Electron main process
+import { app } from 'electron';
 import {
-  app, BrowserWindow, Tray, Menu, nativeImage,
+   BrowserWindow, Tray, Menu, nativeImage,
   ipcMain, powerMonitor, desktopCapturer, screen, shell, dialog
 } from 'electron';
 import { io } from 'socket.io-client';
@@ -561,11 +562,17 @@ async function initializeSocket() {
   });
 
   socket.on('webrtc-answer', ({ watcherId, sdp }: { watcherId: string; sdp: any }) => {
-    console.log('[AGENT] webrtc-answer received for watcher', watcherId);
-    streamWindow?.webContents.send('stream:signal-in', { watcherId, type: 'answer', sdp });
-  });
+  if (!sdp || !sdp.type || !sdp.sdp) {
+    console.error('[AGENT] Invalid SDP answer received', sdp);
+    return;
+  }
+  console.log('[AGENT] webrtc-answer received for watcher', watcherId);
+  streamWindow?.webContents.send('stream:signal-in', { watcherId, type: 'answer', sdp });
+});
+
 
   socket.on('webrtc-ice-candidate', ({ watcherId, candidate }: { watcherId: string; candidate: any }) => {
+    
     console.log('[AGENT] ice-candidate received for watcher', watcherId);
     streamWindow?.webContents.send('stream:signal-in', { watcherId, type: 'ice', candidate });
   });
@@ -812,7 +819,7 @@ ipcMain.handle('end-break', async () => {
   return { ok: true };
 });
 ipcMain.handle('checkout', async () => { await endSession(); await stopTracking(); });
-
+app.commandLine.appendSwitch('disable-features', 'DesktopCaptureUseDxgi');
 // ─── Boot ────────────────────────────────────────────────────────────────────
 app.whenReady().then(async ()=>{
   await createWindow();

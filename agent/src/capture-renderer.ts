@@ -1,17 +1,3 @@
-export {};
-declare global {
-  interface Window {
-    liveWatch: {
-      onStartCapture: (cb: (data: { sourceId: string }) => void) => void;
-      onStopCapture: (cb: () => void) => void;
-      onRemoteAnswer: (cb: (data: { sdp: any }) => void) => void;
-      onRemoteIceCandidate: (cb: (data: { candidate: any }) => void) => void;
-      sendOffer: (sdp: any) => void;
-      sendIceCandidate: (candidate: any) => void;
-      sendReady: () => void;
-    };
-  }
-}
 
 (() => {
   const globalScope = window as Window & typeof globalThis & {
@@ -111,7 +97,7 @@ declare global {
       console.log('[AGENT] local description set');
       console.log('[AGENT] after setLocalDescription');
       console.log('[AGENT] before sendOffer');
-      liveWatch.sendOffer(pc.localDescription);
+      liveWatch.sendOffer(pc.localDescription!.toJSON());
       console.log('[AGENT] after sendOffer');
     } catch (err: any) {
       logErrorWithStack('[AGENT][ERR] WebRTC setup failed', err);
