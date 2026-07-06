@@ -72,7 +72,7 @@ let userName:    string             = get('userName') || '';
 let employeeId:  string             = get('employeeId') || '';
 let sessionId:   string             = '';
 let agentId:     string             = get('agentId') || `agent-${Math.random().toString(36).slice(2,10)}`;
-let status:      'offline'|'active'|'break'|'idle' = token ? 'active' : 'offline';
+let status:      'offline'|'active'|'break'|'idle' = 'offline';
 let tracking     = false;
 let ssInterval:         NodeJS.Timeout|null = null;
 let idleInterval:       NodeJS.Timeout|null = null;
@@ -711,7 +711,7 @@ function updateTray() {
 // ─── Window ─────────────────────────────────────────────────────────────────
 async function createWindow() {
   mainWindow = new BrowserWindow({
-    width:460, height:760, resizable:true,
+    width:560, height:760, resizable:true,
     title:'WorkTrack Agent',
     webPreferences:{ preload:path.join(__dirname,'preload.js'), contextIsolation:true, nodeIntegration:false },
     show: true,
@@ -731,7 +731,6 @@ async function createWindow() {
     try {
       await mainWindow.loadURL('http://localhost:5174');
       console.log('[AGENT] loaded renderer from Vite dev server');
-      mainWindow.webContents.openDevTools();
     } catch (err) {
       console.warn('[AGENT] Vite dev server unavailable, falling back to built renderer', err);
       if (!hasBuiltRenderer) {
@@ -772,7 +771,8 @@ ipcMain.handle('login', async (_e, email:string, password:string) => {
       registerSocketWithServer('employee');
       console.log('Re-registered socket with employeeId:', employeeId);
     }
-    await startTracking();
+    status = 'offline';
+    mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
     return { ok:true, user:res.user };
   } catch (error:any) {
     console.error('Login failed:', error);
@@ -801,7 +801,7 @@ ipcMain.handle('store-alert',      async (_e, alert:any) => { const saved = awai
 ipcMain.handle('manual-shot',      () => captureAndUpload());
 ipcMain.handle('stop-tracking',    () => stopTracking());
 ipcMain.handle('start-tracking',   () => { status = 'active'; return startTracking(); });
-ipcMain.handle('start-work',       async () => { status = 'active'; await startTracking(); if (token) await sessionAction('start'); });
+ipcMain.handle('start-work',       async () => { status = 'active'; await startTracking(); return { ok: true }; });
 ipcMain.handle('start-break',      async () => {
   status = 'break';
   if (ssInterval)        clearInterval(ssInterval);
@@ -839,7 +839,8 @@ app.whenReady().then(async ()=>{
       const nextUserName = authRes?.user?.name || authRes?.user?.full_name || authRes?.user?.fullName || '';
       persistSessionIdentity(token, nextUserName, nextEmployeeId);
       console.log('[AUTH] restored session identity', { employeeId, userName, hasToken: Boolean(token) });
-      startTracking();
+      status = 'offline';
+      mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
     } catch {
       console.log('Stored token invalid/expired — clearing, user must log in again');
       token=''; userName=''; employeeId='';
