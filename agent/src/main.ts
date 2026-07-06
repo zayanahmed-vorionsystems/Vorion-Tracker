@@ -31,6 +31,35 @@ function writeStore(data: Record<string,any>) {
 function get(key:string)        { return readStore()[key]; }
 function set(key:string,val:any){ writeStore({...readStore(),[key]:val}); }
 
+function getEmployeeIdFromUser(user: any): string {
+  const candidate = user?.id || user?.employeeId || user?.employee_id || user?.userId || user?.employee?.id || user?.employee?.employeeId || user?.employee?.employee_id || '';
+  return String(candidate || '').trim();
+}
+
+function persistSessionIdentity(nextToken?: string, nextUserName?: string, nextEmployeeId?: string) {
+  if (typeof nextToken === 'string') {
+    token = nextToken;
+    set('token', token);
+  }
+  if (typeof nextUserName === 'string') {
+    userName = nextUserName;
+    set('userName', userName);
+  }
+  if (typeof nextEmployeeId === 'string') {
+    employeeId = nextEmployeeId;
+    set('employeeId', employeeId);
+  }
+}
+
+function registerSocketWithServer(role: 'employee' = 'employee') {
+  console.log('Register payload', { employeeId, role, token });
+  if (!employeeId) {
+    console.warn('[AUTH] Register skipped because employeeId is empty', { tokenPresent: Boolean(token), storedEmployeeId: get('employeeId') || '' });
+    return;
+  }
+  socket.emit('register', { role, employeeId, token });
+}
+
 // ─── State ─────────────────────────────────────────────────────────────────
 const socket = io(SOCKET_SERVER_URL, { autoConnect:false, transports:['websocket','polling'] });
 socket.on('connect', () => console.log('AGENT SOCKET CONNECTED:', socket.id));
@@ -478,16 +507,21 @@ ipcMain.on('stream:signal-out', (_e, data: { watcherId: string; type: 'offer' | 
 
 // ─── Socket ─────────────────────────────────────────────────────────────────
 async function initializeSocket() {
-  if (socket.connected) return;
-  socket.connect();
-  socket.on('connect', () => {
-    console.log('Socket connected', socket.id);
-    if (employeeId) {
-      socket.emit('register', { role: 'employee', employeeId, token });
-      console.log('Registered with employeeId:', employeeId);
-    }
+  let liveWatchInitialized = false;
+
+socket.on('connect', () => {
+  console.log('Socket connected', socket.id);
+  if (employeeId) {
+    socket.emit('register', { role: 'employee', employeeId, token });
+  }
+  if (!liveWatchInitialized) {
+    console.log('[AGENT] setupLiveWatch called from main.ts after socket connect', { employeeId });
     setupLiveWatch(socket, employeeId);
-  });
+    liveWatchInitialized = true;
+  } else {
+    console.log('[AGENT] socket reconnected — skipping setupLiveWatch (already initialized)');
+  }
+});
   socket.on('new-alert', async (alert: any) => {
     console.log('🔔 Alert received from server:', alert);
     await persistAlert(alert);
@@ -608,9 +642,10 @@ async function stopTracking() {
   if (policySyncInterval) clearInterval(policySyncInterval);
   policySyncInterval = null;
   status = 'offline';
-  teardownLiveWatch();          // ← ADD KARO (closeAllStreams() ki jagah, ya saath mein)
+  teardownLiveWatch();
+  closeAllStreams();
   updateTray();
-  mainWindow?.webContents.send('tracking-status',{ tracking:false });
+  mainWindow?.webContents.send('tracking-status', { tracking:false });
   broadcastStatus();
 }
 app.on('before-quit',()=>{ tracking && stopTracking(); teardownLiveWatch(); removeProxyBlock(); });
@@ -644,7 +679,7 @@ function updateTray() {
 }
 
 // ─── Window ─────────────────────────────────────────────────────────────────
-function createWindow() {
+async function createWindow() {
   mainWindow = new BrowserWindow({
     width:380, height:560, resizable:false,
     title:'WorkTrack Agent',
@@ -659,13 +694,30 @@ function createWindow() {
     console.log('RENDERER CRASHED:', details);
   });
 
+  const indexPath = path.join(__dirname, 'renderer', 'index.html');
+  const hasBuiltRenderer = fs.existsSync(indexPath);
+
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5174');
-    mainWindow.webContents.openDevTools();
+    try {
+      await mainWindow.loadURL('http://localhost:5174');
+      console.log('[AGENT] loaded renderer from Vite dev server');
+      mainWindow.webContents.openDevTools();
+    } catch (err) {
+      console.warn('[AGENT] Vite dev server unavailable, falling back to built renderer', err);
+      if (!hasBuiltRenderer) {
+        console.error('[AGENT] built renderer not found', { indexPath });
+        return;
+      }
+      console.log('[AGENT] loading renderer from built bundle', { indexPath });
+      await mainWindow.loadFile(indexPath);
+    }
   } else {
-    const indexPath = path.join(__dirname, 'renderer', 'index.html');
-    console.log('Loading index from:', indexPath, '| exists:', fs.existsSync(indexPath));
-    mainWindow.loadFile(indexPath).catch((err) => console.error('loadFile error:', err));
+    console.log('Loading index from:', indexPath, '| exists:', hasBuiltRenderer);
+    if (!hasBuiltRenderer) {
+      console.error('[AGENT] built renderer not found', { indexPath });
+      return;
+    }
+    await mainWindow.loadFile(indexPath);
   }
 
   mainWindow.on('close',(e)=>{ e.preventDefault(); mainWindow?.hide(); });
@@ -676,11 +728,20 @@ ipcMain.handle('login', async (_e, email:string, password:string) => {
   try {
     const res = await apiRequest('POST','/api/auth',{ email, password });
     if (!res?.token) throw new Error(res?.error || 'Login failed');
-    token      = res.token;
-    userName   = res.user?.name || '';
-    employeeId = res.user?.id || '';
-    set('token', token); set('userName', userName); set('employeeId', employeeId);
-    if (socket.connected) { socket.emit('register', { role: 'employee', employeeId, token }); console.log('Re-registered socket with employeeId:', employeeId); }
+
+    const nextEmployeeId = getEmployeeIdFromUser(res?.user || res?.profile || null);
+    const nextUserName = res?.user?.name || res?.user?.full_name || res?.user?.fullName || '';
+
+    persistSessionIdentity(res.token, nextUserName, nextEmployeeId);
+
+    if (!employeeId) {
+      console.warn('[AUTH] Login response did not contain an employeeId', { responseKeys: Object.keys(res || {}) });
+    }
+
+    if (socket.connected) {
+      registerSocketWithServer('employee');
+      console.log('Re-registered socket with employeeId:', employeeId);
+    }
     await startTracking();
     return { ok:true, user:res.user };
   } catch (error:any) {
@@ -732,7 +793,7 @@ ipcMain.handle('checkout', async () => { await endSession(); await stopTracking(
 
 // ─── Boot ────────────────────────────────────────────────────────────────────
 app.whenReady().then(async ()=>{
-  createWindow();
+  await createWindow();
   const iconPath = path.join(
     isDev ? path.join(__dirname,'../assets') : process.resourcesPath,
     process.platform==='win32'?'icon.ico':process.platform==='darwin'?'icon.icns':'icon.png'
@@ -744,7 +805,11 @@ app.whenReady().then(async ()=>{
   mainWindow?.show();
   if (token) {
     try {
-      await apiRequest('GET', '/api/auth');
+      const authRes = await apiRequest('GET', '/api/auth');
+      const nextEmployeeId = getEmployeeIdFromUser(authRes?.user || authRes?.profile || null);
+      const nextUserName = authRes?.user?.name || authRes?.user?.full_name || authRes?.user?.fullName || '';
+      persistSessionIdentity(token, nextUserName, nextEmployeeId);
+      console.log('[AUTH] restored session identity', { employeeId, userName, hasToken: Boolean(token) });
       startTracking();
     } catch {
       console.log('Stored token invalid/expired — clearing, user must log in again');

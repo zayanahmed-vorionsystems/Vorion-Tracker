@@ -8,6 +8,18 @@ let currentAdminId: string | null = null;
 let listenersBound = false;
 let socketListenersBound = false;
 let windowReadyPromise: Promise<void> | null = null;
+let captureWindowReady = false;
+
+function logErrorWithStack(message: string, error: unknown) {
+  console.error(message);
+  if (error instanceof Error) {
+    console.error(error.stack || error.message || String(error));
+  } else if (typeof error === 'object' && error !== null) {
+    console.error(JSON.stringify(error, null, 2));
+  } else {
+    console.error(String(error));
+  }
+}
 
 function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> } {
   if (captureWindow && !captureWindow.isDestroyed() && windowReadyPromise) {
@@ -21,13 +33,16 @@ function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> 
   ].filter((candidate, index, list) => list.indexOf(candidate) === index);
   const captureHtmlPath = candidateHtmlPaths.find((candidate) => fs.existsSync(candidate)) || candidateHtmlPaths[0];
 
-  console.log('[live-watch] __dirname', __dirname);
-  console.log('[live-watch] captureHtmlPath', captureHtmlPath);
-  console.log('[live-watch] existsSync', fs.existsSync(captureHtmlPath));
+  console.log('[AGENT][2] capture window created', {
+    captureHtmlPath,
+    captureHtmlExists: fs.existsSync(captureHtmlPath),
+    preloadPath: path.join(__dirname, 'capture-preload.js'),
+    preloadExists: fs.existsSync(path.join(__dirname, 'capture-preload.js')),
+  });
 
   const preloadPath = path.join(__dirname, 'capture-preload.js');
-  console.log('[live-watch] preloadPath', preloadPath);
-  console.log('[live-watch] preloadExists', fs.existsSync(preloadPath));
+  console.log('[AGENT][live-watch] preloadPath', preloadPath);
+  console.log('[AGENT][live-watch] preloadExists', fs.existsSync(preloadPath));
 
   const win = new BrowserWindow({
     show: false,
@@ -41,6 +56,7 @@ function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> 
   });
 
   captureWindow = win;
+  captureWindowReady = false;
 
   // 🔍 TEMPORARY DEBUG — capture window ki apni DevTools alag window mein kholo
   // taake [CAPTURE] logs dikh sakein. Debugging khatam hone par ye line hata dena.
@@ -65,12 +81,16 @@ function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> 
     if (captureWindow === win) {
       captureWindow = null;
       windowReadyPromise = null;
+      captureWindowReady = false;
     }
   });
 
   const ready = new Promise<void>((resolve) => {
     win.webContents.once('did-finish-load', () => {
-      console.log('[live-watch] capture.html loaded successfully');
+      console.log('[AGENT][3] capture.html loaded', {
+        url: win.webContents.getURL(),
+        captureHtmlPath,
+      });
       resolve();
     });
   });
@@ -78,24 +98,25 @@ function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> 
 
   win.loadFile(captureHtmlPath).catch((err) => {
     if (win.isDestroyed()) {
-      console.log('[live-watch] capture window was closed before load completed');
+      console.log('[AGENT][ERR] capture window was closed before load completed');
       return;
     }
-    console.error('Failed to load capture window', { captureHtmlPath, err });
+    logErrorWithStack('[AGENT][ERR] Failed to load capture window', err);
+    console.error('[AGENT][ERR] capture window load context', { captureHtmlPath });
   });
 
   return { win, ready };
 }
 
 async function sendStartCapture(win: BrowserWindow) {
-  console.log('[MAIN] requesting desktop sources');
+  console.log('[AGENT][live-watch] requesting desktop sources');
   const sources = await desktopCapturer.getSources({
     types: ['screen'],
     thumbnailSize: { width: 1280, height: 720 },
   });
   const primary = sources[0];
   if (!primary) {
-    console.error('[MAIN] no desktop sources available');
+    logErrorWithStack('[AGENT][ERR] no desktop sources available', new Error('No desktop sources available'));
     return;
   }
 
@@ -104,9 +125,34 @@ async function sendStartCapture(win: BrowserWindow) {
     return;
   }
 
-  console.log('[MAIN] desktop capture sources resolved', { sourceId: primary.id, totalSources: sources.length });
-  console.log('[MAIN] sending start-capture to hidden capture window', { sourceId: primary.id });
+  console.log('[AGENT][6] desktopCapturer.getSources success', { sourceId: primary.id, totalSources: sources.length });
+  const ready = await new Promise<boolean>((resolve) => {
+    if (captureWindowReady) {
+      resolve(true);
+      return;
+    }
+
+    const onReady = () => {
+      ipcMain.removeListener('live-watch:ready', onReady);
+      resolve(true);
+    };
+
+    const timeout = setTimeout(() => {
+      ipcMain.removeListener('live-watch:ready', onReady);
+      resolve(false);
+    }, 5000);
+
+    ipcMain.once('live-watch:ready', onReady);
+  });
+
+  if (!ready) {
+    console.error('[MAIN] capture window did not report ready before start-capture');
+    return;
+  }
+
+  console.log('[AGENT][live-watch] before send start-capture to hidden capture window', { sourceId: primary.id });
   win.webContents.send('start-capture', { sourceId: primary.id });
+  console.log('[AGENT][live-watch] after send start-capture to hidden capture window', { sourceId: primary.id });
 }
 
 export function setupLiveWatch(socket: Socket, employeeId: string) {
@@ -114,7 +160,7 @@ export function setupLiveWatch(socket: Socket, employeeId: string) {
     socketListenersBound = true;
 
     socket.on('stream-request', async ({ adminId }: { adminId: string }) => {
-      console.log('[MAIN] stream-request received', { adminId, employeeId });
+      console.log('[AGENT][1] stream-request received', { adminId, employeeId });
       currentAdminId = adminId;
 
       try {
@@ -140,8 +186,7 @@ export function setupLiveWatch(socket: Socket, employeeId: string) {
 
         await sendStartCapture(win);
       } catch (error: any) {
-        console.error('[MAIN] unable to start screen capture for stream request');
-        console.error(error?.stack || error);
+        logErrorWithStack('[AGENT][ERR] unable to start screen capture for stream request', error);
       }
     });
 
@@ -169,14 +214,20 @@ export function setupLiveWatch(socket: Socket, employeeId: string) {
   if (!listenersBound) {
     listenersBound = true;
 
+    ipcMain.on('live-watch:ready', () => {
+      captureWindowReady = true;
+      console.log('[MAIN] live-watch:ready received from capture window');
+    });
+
     ipcMain.on('live-watch:offer', (_event, { sdp }) => {
-      console.log('[MAIN] live-watch:offer received', {
+      console.log('[AGENT][live-watch] live-watch:offer received', {
         employeeId,
         adminId: currentAdminId,
         hasSdp: Boolean(sdp),
       });
-      console.log('[MAIN] emitting stream-offer to socket server');
+      console.log('[AGENT][11] before socket.emit stream-offer', { employeeId, adminId: currentAdminId, hasSdp: Boolean(sdp) });
       socket.emit('stream-offer', { employeeId, adminId: currentAdminId, sdp });
+      console.log('[AGENT][11] after socket.emit stream-offer', { employeeId, adminId: currentAdminId, hasSdp: Boolean(sdp) });
     });
 
     ipcMain.on('live-watch:ice-candidate', (_event, { candidate }) => {

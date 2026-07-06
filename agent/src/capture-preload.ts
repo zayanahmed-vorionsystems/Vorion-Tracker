@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+console.log('[AGENT][4] preload loaded');
+
 contextBridge.exposeInMainWorld('liveWatch', {
   onStartCapture: (cb: (data: { sourceId: string }) => void) =>
     ipcRenderer.on('start-capture', (_event, data) => cb(data)),
@@ -18,4 +20,7 @@ contextBridge.exposeInMainWorld('liveWatch', {
 
   sendIceCandidate: (candidate: any) =>
     ipcRenderer.send('live-watch:ice-candidate', { candidate }),
+
+  sendReady: () =>
+    ipcRenderer.send('live-watch:ready'),
 });

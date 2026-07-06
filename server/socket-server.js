@@ -69,6 +69,8 @@ io.on('connection', (socket) => {
     socket.data.role = role || socket.handshake.query.role || 'unknown';
     socket.data.employeeId = employeeId || socket.handshake.query.employeeId || null;
 
+    console.log('[socket-server] register received', { employeeId: socket.data.employeeId, role: socket.data.role, socketId: socket.id });
+
     if (socket.data.role === 'admin' || socket.data.role === 'team_lead' || socket.data.role === 'super_admin') {
       socket.join('admins');
     }
@@ -85,6 +87,7 @@ io.on('connection', (socket) => {
       }
       employeeSocketMap.set(socket.data.employeeId, socket.id);
       socket.join(`employee:${socket.data.employeeId}`);
+      console.log('[socket-server] Socket joined room:', `employee:${socket.data.employeeId}`);
     }
   });
 
@@ -132,37 +135,51 @@ io.on('connection', (socket) => {
   socket.on('stream-request', ({ employeeId, adminId }) => {
     if (!employeeId) return;
     console.log('[socket-server] stream-request received', { employeeId, adminId: adminId || socket.id });
+    console.log('[socket-server] emitting stream-request to employee agent');
     io.to(`employee:${employeeId}`).emit('stream-request', { employeeId, adminId: adminId || socket.id });
+    console.log('[socket-server] stream-request emitted');
   });
 
   socket.on('stream-offer', ({ employeeId, adminId, sdp }) => {
     if (!employeeId || !adminId) return;
     console.log('[socket-server] stream-offer received; forwarding to admin', { employeeId, adminId, hasSdp: Boolean(sdp) });
+    console.log('[socket-server] emitting stream-offer to admin');
     io.to(adminId).emit('stream-offer', { employeeId, sdp });
+    console.log('[socket-server] stream-offer emitted');
   });
 
   socket.on('stream-answer', ({ employeeId, adminId, sdp }) => {
     if (!employeeId || !adminId) return;
     console.log('[socket-server] stream-answer received; forwarding to agent', { employeeId, adminId, hasSdp: Boolean(sdp) });
+    console.log('[socket-server] emitting stream-answer to employee agent');
     io.to(`employee:${employeeId}`).emit('stream-answer', { employeeId, adminId, sdp });
+    console.log('[socket-server] stream-answer emitted');
   });
 
   socket.on('ice-candidate', ({ employeeId, adminId, candidate, from }) => {
     if (from === 'admin' && employeeId) {
       console.log('[socket-server] ICE candidate received from admin; forwarding to agent', { employeeId, candidateType: candidate?.candidate?.slice(0, 12) });
+      console.log('[socket-server] emitting ice-candidate to employee agent');
       io.to(`employee:${employeeId}`).emit('ice-candidate', { employeeId, adminId: socket.id, candidate, from: 'admin' });
+      console.log('[socket-server] ice-candidate emitted');
     } else if (from === 'agent' && adminId) {
       console.log('[socket-server] ICE candidate received from agent; forwarding to admin', { employeeId, adminId, candidateType: candidate?.candidate?.slice(0, 12) });
+      console.log('[socket-server] emitting ice-candidate to admin');
       io.to(adminId).emit('ice-candidate', { employeeId, candidate, from: 'agent' });
+      console.log('[socket-server] ice-candidate emitted');
     }
   });
 
   socket.on('stop-stream', ({ employeeId, adminId }) => {
     if (!employeeId) return;
+    console.log('[socket-server] stop-stream received', { employeeId, adminId });
+    console.log('[socket-server] emitting stop-stream to employee agent');
     io.to(`employee:${employeeId}`).emit('stop-stream', { employeeId, adminId: adminId || socket.id });
     if (adminId) {
+      console.log('[socket-server] emitting stop-stream to admin');
       io.to(adminId).emit('stop-stream', { employeeId });
     }
+    console.log('[socket-server] stop-stream emitted');
   });
 
   socket.on('disconnect', (reason) => {

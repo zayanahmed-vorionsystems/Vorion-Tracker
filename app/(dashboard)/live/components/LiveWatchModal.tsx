@@ -1,21 +1,32 @@
 'use client';
-
+// app/(dashboard)/live/components/LiveWatchModal.tsx
 import { RefObject } from 'react';
 
-type LiveWatchModalProps = {
+interface LiveWatchModalProps {
   videoRef: RefObject<HTMLVideoElement>;
   isConnecting: boolean;
   isStreaming: boolean;
-  employeeName?: string;
-  connectionState?: string;
-  error?: string | null;
-  isEnlarged?: boolean;
-  isRecording?: boolean;
+  employeeName: string;
+  connectionState: string;
+  error: string | null;
+  isEnlarged: boolean;
+  isRecording: boolean;
   onClose: () => void;
   onRefresh: () => void;
   onStartRecording: () => void;
   onStopRecording: () => void;
   onFullscreen: () => void;
+}
+
+const COLORS = {
+  bg: '#0B0F1A',
+  panel: 'rgba(11,15,26,.95)',
+  border: 'rgba(248,250,252,.10)',
+  text: '#F8FAFC',
+  textMuted: 'rgba(248,250,252,.5)',
+  gold: '#F8D000',
+  green: '#4ADE80',
+  red: '#FF5C7A',
 };
 
 export function LiveWatchModal({
@@ -23,10 +34,10 @@ export function LiveWatchModal({
   isConnecting,
   isStreaming,
   employeeName,
-  connectionState = 'Idle',
+  connectionState,
   error,
-  isEnlarged = false,
-  isRecording = false,
+  isEnlarged,
+  isRecording,
   onClose,
   onRefresh,
   onStartRecording,
@@ -34,54 +45,198 @@ export function LiveWatchModal({
   onFullscreen,
 }: LiveWatchModalProps) {
   return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 p-3 sm:p-6">
-      <div className="flex h-[90vh] w-[90vw] flex-col overflow-hidden rounded-3xl border border-white/10 bg-slate-950/95 shadow-2xl shadow-black/60">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3 text-sm text-slate-100">
-          <div>
-            <div className="font-semibold">{employeeName || 'Employee'} • Live Monitor</div>
-            <div className="text-xs text-slate-400">{connectionState}</div>
+    <div
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,.65)',
+        backdropFilter: 'blur(4px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+        padding: 20,
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: isEnlarged ? '50vw' : 460,
+          height: isEnlarged ? '50vh' : 300,
+          maxWidth: '95vw',
+          maxHeight: '90vh',
+          background: COLORS.panel,
+          border: `1px solid ${COLORS.border}`,
+          borderRadius: 16,
+          boxShadow: '0 20px 60px rgba(0,0,0,.5)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          transition: 'width .25s ease, height .25s ease',
+        }}
+      >
+        {/* Header */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '10px 14px',
+            borderBottom: `1px solid ${COLORS.border}`,
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                background: isStreaming ? COLORS.green : COLORS.gold,
+                boxShadow: isStreaming ? `0 0 6px ${COLORS.green}` : `0 0 6px ${COLORS.gold}`,
+                display: 'inline-block',
+              }}
+            />
+            <span style={{ fontSize: 14, fontWeight: 600, color: COLORS.text }}>{employeeName}</span>
+            <span style={{ fontSize: 11, color: COLORS.textMuted }}>· {connectionState}</span>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button onClick={onStartRecording} className="rounded-lg border border-emerald-400/30 bg-emerald-500/15 px-3 py-2 text-sm text-emerald-300 hover:bg-emerald-500/25">
-              {isRecording ? 'Recording…' : 'Start Recording'}
-            </button>
-            <button onClick={onStopRecording} className="rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-sm hover:bg-white/20">
-              Stop Recording
-            </button>
-            <button onClick={onRefresh} className="rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-sm hover:bg-white/20">
-              Refresh
-            </button>
-            <button onClick={onFullscreen} className="rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-sm hover:bg-white/20">
-              {isEnlarged ? 'Shrink' : 'Expand'}
-            </button>
-            <button onClick={onClose} className="rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-sm hover:bg-white/20" aria-label="Close">
-              ✕
-            </button>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: COLORS.textMuted,
+              fontSize: 18,
+              lineHeight: 1,
+              cursor: 'pointer',
+              padding: 4,
+            }}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Video area — click to enlarge/shrink */}
+        <div
+          onClick={onFullscreen}
+          title={isEnlarged ? 'Click to shrink' : 'Click to enlarge'}
+          style={{
+            flex: 1,
+            position: 'relative',
+            background: '#000',
+            cursor: 'pointer',
+            minHeight: 0,
+          }}
+        >
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+          />
+
+          {!isStreaming && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                color: COLORS.textMuted,
+                fontSize: 12,
+                background: 'rgba(0,0,0,.3)',
+              }}
+            >
+              {isConnecting ? 'Connecting to live screen…' : (error || 'Waiting for stream…')}
+            </div>
+          )}
+
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 8,
+              right: 10,
+              fontSize: 10,
+              color: 'rgba(255,255,255,.6)',
+              background: 'rgba(0,0,0,.5)',
+              borderRadius: 6,
+              padding: '2px 6px',
+            }}
+          >
+            {isEnlarged ? 'Click to shrink' : 'Click to enlarge'}
           </div>
         </div>
 
-        <div className="flex-1 overflow-hidden bg-black p-2 sm:p-3">
-          <div className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-black">
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="h-full w-full object-contain"
-            />
-
-            {(isConnecting || !isStreaming) && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950/75 text-center text-slate-100">
-                <div className="h-10 w-10 animate-spin rounded-full border-2 border-slate-600 border-t-amber-400" />
-                <div className="text-lg font-semibold">{isConnecting ? 'Connecting live stream…' : 'Waiting for stream'}</div>
-                <div className="text-sm text-slate-400">{error || 'The agent is preparing the desktop stream.'}</div>
-              </div>
+        {/* Footer controls */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            padding: '8px 14px',
+            borderTop: `1px solid ${COLORS.border}`,
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ fontSize: 11, color: error ? COLORS.red : COLORS.textMuted }}>
+            {error || ''}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={(e) => { e.stopPropagation(); onRefresh(); }}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 8,
+                border: `1px solid ${COLORS.border}`,
+                background: 'transparent',
+                color: COLORS.text,
+                fontSize: 12,
+                cursor: 'pointer',
+              }}
+            >
+              ↻ Refresh
+            </button>
+            {isRecording ? (
+              <button
+                onClick={(e) => { e.stopPropagation(); onStopRecording(); }}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(255,92,122,.4)',
+                  background: 'rgba(255,92,122,.15)',
+                  color: COLORS.red,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                ⏹ Stop Recording
+              </button>
+            ) : (
+              <button
+                onClick={(e) => { e.stopPropagation(); onStartRecording(); }}
+                disabled={!isStreaming}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 8,
+                  border: `1px solid ${COLORS.border}`,
+                  background: 'transparent',
+                  color: COLORS.text,
+                  fontSize: 12,
+                  cursor: isStreaming ? 'pointer' : 'not-allowed',
+                  opacity: isStreaming ? 1 : 0.5,
+                }}
+              >
+                ● Record
+              </button>
             )}
           </div>
-        </div>
-
-        <div className="border-t border-white/10 px-4 py-3 text-sm text-slate-400">
-          Status: <span className="font-semibold text-slate-100">{isStreaming ? 'Connected' : connectionState}</span>
         </div>
       </div>
     </div>

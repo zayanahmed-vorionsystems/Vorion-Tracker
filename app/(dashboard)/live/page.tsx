@@ -213,7 +213,9 @@ export default function LiveMonitorPage() {
         console.log('[live-monitor] createAnswer');
         await pc.setLocalDescription(answer);
         console.log('[live-monitor] answer sent');
+        console.log('[live-monitor] emitting stream-answer', { employeeId, adminId: socket.id, hasSdp: Boolean(answer) });
         socket.emit('stream-answer', { employeeId, adminId: socket.id, sdp: answer });
+        console.log('[live-monitor] stream-answer emitted');
         setStreamState('Connected');
         setIsConnectingStream(false);
         setIsStreaming(true);
@@ -361,6 +363,7 @@ export default function LiveMonitorPage() {
     pc.onicecandidate = (event) => {
       if (event.candidate && socketRef.current) {
         console.log('[live-monitor] ICE candidate sent');
+        console.log('[live-monitor] emitting ice-candidate', { employeeId, adminId: socketRef.current.id, from: 'admin' });
         socketRef.current.emit('ice-candidate', {
           employeeId,
           adminId: socketRef.current.id,
@@ -414,6 +417,7 @@ export default function LiveMonitorPage() {
     peerRef.current = pc;
     console.log('[live-monitor] emitting stream-request', { employeeId, adminId: socketRef.current.id, attempt: connectAttemptsRef.current + 1 });
     socketRef.current.emit('stream-request', { employeeId, adminId: socketRef.current.id });
+    console.log('[live-monitor] stream-request emitted');
 
     clearConnectTimeout();
     connectTimeoutRef.current = setTimeout(() => {
