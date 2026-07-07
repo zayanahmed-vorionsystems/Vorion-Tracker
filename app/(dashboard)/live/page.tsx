@@ -146,6 +146,7 @@ export default function LiveMonitorPage() {
   const channelSetupInFlightRef = useRef<Promise<{ channel: any; ready: Promise<void> }> | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const adminIdRef = useRef<string>('');
+  const streamRequestIdRef = useRef<string | null>(null);
   const activeEmployeeRef = useRef<string | null>(null);
   const selectedEmployeeRef = useRef<Employee | null>(null);
   const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -451,6 +452,7 @@ export default function LiveMonitorPage() {
           payload: {
             employeeId,
             adminId: adminIdRef.current,
+            requestId: streamRequestIdRef.current,
             candidate: event.candidate.toJSON(),
             from: 'admin',
           },
@@ -480,6 +482,7 @@ export default function LiveMonitorPage() {
     remoteStreamRef.current = null;
     activeEmployeeRef.current = null;
     selectedEmployeeRef.current = null;
+    streamRequestIdRef.current = null;
     setIsStreaming(false);
     isStreamingRef.current = false;
     setIsConnectingStream(false);
@@ -595,7 +598,12 @@ export default function LiveMonitorPage() {
 
       channel.on('broadcast', { event: 'offer' }, async ({ payload }: { payload: any }) => {
         if (payload?.from !== 'agent' || payload?.employeeId !== employeeId) return;
-        console.log('[live-monitor] stream-offer received', { employeeId, hasSdp: Boolean(payload?.sdp) });
+        const requestId = typeof payload?.requestId === 'string' ? payload.requestId : null;
+        if (requestId && streamRequestIdRef.current && requestId !== streamRequestIdRef.current) {
+          console.warn('[live-monitor] ignoring stale offer', { employeeId, requestId, activeRequestId: streamRequestIdRef.current });
+          return;
+        }
+        console.log('[live-monitor] stream-offer received', { employeeId, hasSdp: Boolean(payload?.sdp), requestId });
         try {
           clearConnectTimeout();
           clearReconnectTimer();
@@ -608,7 +616,13 @@ export default function LiveMonitorPage() {
           const result = await channel.send({
             type: 'broadcast',
             event: 'answer',
-            payload: { employeeId, adminId: adminIdRef.current, from: 'admin', sdp: serializeSessionDescription(localDescription) ?? serializeSessionDescription(answer) },
+            payload: {
+              employeeId,
+              adminId: adminIdRef.current,
+              requestId,
+              from: 'admin',
+              sdp: serializeSessionDescription(localDescription) ?? serializeSessionDescription(answer),
+            },
           });
           console.log('[live-monitor] send answer result:', result);
           if (result !== 'ok') {
@@ -626,7 +640,12 @@ export default function LiveMonitorPage() {
 
       channel.on('broadcast', { event: 'answer' }, async ({ payload }: { payload: any }) => {
         if (payload?.from !== 'agent' || payload?.employeeId !== employeeId) return;
-        console.log('[live-monitor] answer received from agent', { employeeId, hasSdp: Boolean(payload?.sdp) });
+        const requestId = typeof payload?.requestId === 'string' ? payload.requestId : null;
+        if (requestId && streamRequestIdRef.current && requestId !== streamRequestIdRef.current) {
+          console.warn('[live-monitor] ignoring stale answer', { employeeId, requestId, activeRequestId: streamRequestIdRef.current });
+          return;
+        }
+        console.log('[live-monitor] answer received from agent', { employeeId, hasSdp: Boolean(payload?.sdp), requestId });
         const pc = peerRef.current;
         if (!pc) {
           console.warn('[live-monitor] received answer but no active peer connection exists');
@@ -653,6 +672,10 @@ export default function LiveMonitorPage() {
 
       channel.on('broadcast', { event: 'ice-candidate' }, async ({ payload }: { payload: any }) => {
         if (payload?.from !== 'agent' || payload?.employeeId !== employeeId) return;
+        const requestId = typeof payload?.requestId === 'string' ? payload.requestId : null;
+        if (requestId && streamRequestIdRef.current && requestId !== streamRequestIdRef.current) {
+          return;
+        }
         if (!peerRef.current || !payload?.candidate) return;
         try {
           await peerRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
@@ -771,6 +794,8 @@ export default function LiveMonitorPage() {
     setIsStreaming(false);
     setStreamError(null);
 
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    streamRequestIdRef.current = requestId;
     const pc = createPeerConnection(employeeId);
     peerRef.current = pc;
 
@@ -781,7 +806,13 @@ export default function LiveMonitorPage() {
       const result = await channel.send({
         type: 'broadcast',
         event: 'offer',
-        payload: { employeeId, adminId: adminIdRef.current, from: 'admin', sdp: serializeSessionDescription(localDescription) ?? serializeSessionDescription(offer) },
+        payload: {
+          employeeId,
+          adminId: adminIdRef.current,
+          requestId,
+          from: 'admin',
+          sdp: serializeSessionDescription(localDescription) ?? serializeSessionDescription(offer),
+        },
       });
       console.log('[live-monitor] send offer result:', result);
       if (result !== 'ok') {
@@ -816,7 +847,13 @@ export default function LiveMonitorPage() {
         void channel.send({
           type: 'broadcast',
           event: 'offer',
-          payload: { employeeId, adminId: adminIdRef.current, from: 'admin', sdp: serializeSessionDescription(pc.localDescription) },
+          payload: {
+            employeeId,
+            adminId: adminIdRef.current,
+            requestId: streamRequestIdRef.current || requestId,
+            from: 'admin',
+            sdp: serializeSessionDescription(pc.localDescription),
+          },
         }).then((result: string) => {
           console.log('[live-monitor] retry send offer result:', result);
         });

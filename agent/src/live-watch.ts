@@ -11,6 +11,7 @@ let captureWindowReady = false;
 let liveChannel: RealtimeChannel | null = null;
 let liveChannelEmployeeId: string | null = null;
 let activeAdminIds = new Set<string>();
+let pendingCaptureRequests: Array<{ adminId: string; offer?: any; requestId?: string }> = [];
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
 console.log('[AGENT] Supabase URL being used:', SUPABASE_URL);
@@ -139,7 +140,7 @@ function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> 
   return { win, ready };
 }
 
-async function sendStartCapture(win: BrowserWindow, adminId: string, offer?: any) {
+async function sendStartCapture(win: BrowserWindow, adminId: string, offer?: any, requestId?: string) {
   const sources = await desktopCapturer.getSources({
     types: ['screen'],
     thumbnailSize: { width: 1280, height: 720 },
@@ -181,8 +182,30 @@ async function sendStartCapture(win: BrowserWindow, adminId: string, offer?: any
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 
-  console.log('[AGENT] sending start-capture to hidden capture window', { adminId, sourceId: chosen.id, hasOffer: Boolean(offer) });
-  win.webContents.send('start-capture', { sourceId: chosen.id, adminId, offer });
+  console.log('[AGENT] sending start-capture to hidden capture window', { adminId, requestId, sourceId: chosen.id, hasOffer: Boolean(offer) });
+  win.webContents.send('start-capture', { sourceId: chosen.id, adminId, offer, requestId });
+}
+
+async function flushPendingCaptureRequests() {
+  if (!captureWindowReady) {
+    return;
+  }
+
+  const queued = pendingCaptureRequests.splice(0);
+  for (const request of queued) {
+    try {
+      const { win, ready } = getOrCreateCaptureWindow();
+      await ready;
+      await sendStartCapture(win, request.adminId, request.offer, request.requestId);
+    } catch (error: any) {
+      logErrorWithStack('[AGENT][ERR] unable to flush pending screen capture request', error);
+    }
+  }
+}
+
+function queueStartCapture(adminId: string, offer?: any, requestId?: string) {
+  pendingCaptureRequests.push({ adminId, offer, requestId });
+  void flushPendingCaptureRequests();
 }
 
 function getChannelName(employeeId: string) {
@@ -219,9 +242,14 @@ function ensureChannel(employeeId: string) {
     activeAdminIds.add(adminId);
     void (async () => {
       try {
+        const requestId = typeof payload?.requestId === 'string' ? payload.requestId : undefined;
+        if (!captureWindowReady) {
+          queueStartCapture(adminId, payload?.sdp, requestId);
+          return;
+        }
         const { win, ready } = getOrCreateCaptureWindow();
         await ready;
-        await sendStartCapture(win, adminId, payload?.sdp);
+        await sendStartCapture(win, adminId, payload?.sdp, requestId);
       } catch (error: any) {
         logErrorWithStack('[AGENT][ERR] unable to start screen capture for stream request', error);
       }
@@ -231,12 +259,12 @@ function ensureChannel(employeeId: string) {
   channel.on('broadcast', { event: 'answer' }, ({ payload }: { payload: any }) => {
     if (payload?.from !== 'admin') return;
     console.log('[AGENT] Answer relay received for adminId:', payload?.adminId);
-    captureWindow?.webContents.send('remote-answer', { adminId: payload.adminId, sdp: payload.sdp });
+    captureWindow?.webContents.send('remote-answer', { adminId: payload.adminId, sdp: payload.sdp, requestId: payload.requestId });
   });
 
   channel.on('broadcast', { event: 'ice-candidate' }, ({ payload }: { payload: any }) => {
     if (payload?.from !== 'admin') return;
-    captureWindow?.webContents.send('remote-ice-candidate', { adminId: payload.adminId, candidate: payload.candidate });
+    captureWindow?.webContents.send('remote-ice-candidate', { adminId: payload.adminId, candidate: payload.candidate, requestId: payload.requestId });
   });
 
   channel.on('broadcast', { event: 'stop-stream' }, ({ payload }: { payload: any }) => {
@@ -297,9 +325,10 @@ export function setupLiveWatch(employeeId: string) {
 
     ipcMain.on('live-watch:ready', () => {
       captureWindowReady = true;
+      void flushPendingCaptureRequests();
     });
 
-    ipcMain.on('live-watch:answer', async (_event, { adminId, sdp }) => {
+    ipcMain.on('live-watch:answer', async (_event, { adminId, sdp, requestId }) => {
       if (!liveChannel) {
         console.error('[AGENT][ERR] No active channel to send answer on');
         return;
@@ -307,7 +336,7 @@ export function setupLiveWatch(employeeId: string) {
       const result = await liveChannel.send({
         type: 'broadcast',
         event: 'answer',
-        payload: { employeeId: liveChannelEmployeeId, adminId, from: 'agent', sdp },
+        payload: { employeeId: liveChannelEmployeeId, adminId, requestId, from: 'agent', sdp },
       });
       console.log('[AGENT] send answer result:', result);
       if (result !== 'ok') {
@@ -315,7 +344,7 @@ export function setupLiveWatch(employeeId: string) {
       }
     });
 
-    ipcMain.on('live-watch:ice-candidate', async (_event, { adminId, candidate }) => {
+    ipcMain.on('live-watch:ice-candidate', async (_event, { adminId, candidate, requestId }) => {
       if (!liveChannel) {
         console.error('[AGENT][ERR] No active channel to send ICE candidate on');
         return;
@@ -323,7 +352,7 @@ export function setupLiveWatch(employeeId: string) {
       const result = await liveChannel.send({
         type: 'broadcast',
         event: 'ice-candidate',
-        payload: { employeeId: liveChannelEmployeeId, adminId, from: 'agent', candidate },
+        payload: { employeeId: liveChannelEmployeeId, adminId, requestId, from: 'agent', candidate },
       });
       if (result !== 'ok') {
         console.error('[AGENT][ERR] Failed to send ICE candidate to admin:', result);

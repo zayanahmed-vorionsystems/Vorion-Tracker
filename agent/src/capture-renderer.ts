@@ -40,8 +40,8 @@
     }
   }
 
-  async function startCaptureForAdmin(sourceId: string, adminId: string, offer?: any) {
-    console.log('[AGENT] starting capture for admin', { sourceId, adminId, hasOffer: Boolean(offer) });
+  async function startCaptureForAdmin(sourceId: string, adminId: string, offer?: any, requestId?: string) {
+    console.log('[AGENT] starting capture for admin', { sourceId, adminId, requestId, hasOffer: Boolean(offer) });
     stopCaptureForAdmin(adminId);
 
     try {
@@ -82,7 +82,7 @@
       };
       pc.onicecandidate = (e) => {
         if (e.candidate) {
-          liveWatch.sendIceCandidate(adminId, e.candidate.toJSON());
+          liveWatch.sendIceCandidate(adminId, e.candidate.toJSON(), requestId);
         }
       };
 
@@ -94,7 +94,7 @@
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
-        liveWatch.sendAnswer(adminId, pc.localDescription!.toJSON());
+        liveWatch.sendAnswer(adminId, pc.localDescription!.toJSON(), requestId);
       }
     } catch (err: any) {
       logErrorWithStack('[AGENT][ERR] WebRTC setup failed', err);
@@ -112,15 +112,15 @@
     });
   }
 
-  liveWatch.onStartCapture(({ sourceId, adminId, offer }: { sourceId: string; adminId: string; offer?: any }) => {
-    startCaptureForAdmin(sourceId, adminId, offer).catch((err) => {
+  liveWatch.onStartCapture(({ sourceId, adminId, offer, requestId }: { sourceId: string; adminId: string; offer?: any; requestId?: string }) => {
+    startCaptureForAdmin(sourceId, adminId, offer, requestId).catch((err) => {
       logErrorWithStack('[AGENT][ERR] startCapture rejected', err);
     });
   });
 
   liveWatch.onStopCapture(({ adminId }: { adminId?: string } = {}) => stopCaptureForAdmin(adminId));
 
-  liveWatch.onRemoteAnswer(async ({ adminId, sdp }: { adminId: string; sdp: any }) => {
+  liveWatch.onRemoteAnswer(async ({ adminId, sdp, requestId }: { adminId: string; sdp: any; requestId?: string }) => {
     const pc = pcs.get(adminId);
     if (pc) {
       try {
@@ -131,7 +131,7 @@
     }
   });
 
-  liveWatch.onRemoteIceCandidate(({ adminId, candidate }: { adminId: string; candidate: any }) => {
+  liveWatch.onRemoteIceCandidate(({ adminId, candidate, requestId }: { adminId: string; candidate: any; requestId?: string }) => {
     const pc = pcs.get(adminId);
     if (pc) {
       pc.addIceCandidate(new RTCIceCandidate(candidate)).catch((err) => {
