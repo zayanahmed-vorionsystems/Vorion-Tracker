@@ -4,19 +4,21 @@
   "description": "WorkTrack silent background agent — captures screenshots and tracks time",
   "main": "dist/main.js",
   "scripts": {
-   "dev": "concurrently \"vite\" \"tsc -p tsconfig.electron.json --watch\" \"esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=dist/capture-renderer.js --watch\" \"node scripts/copy-electron-assets.cjs\" \"wait-on http://localhost:5174 && wait-on dist/main.js && electron .\"",
+    "dev": "concurrently \"vite\" \"tsc -p tsconfig.electron.json --watch\" \"esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=dist/capture-renderer.js --watch\" \"node scripts/copy-electron-assets.cjs\" \"wait-on http://localhost:5174 && wait-on dist/main.js && electron .\"",
     "build": "vite build && tsc -p tsconfig.electron.json && esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=dist/capture-renderer.js && esbuild src/capture-preload.ts --bundle --platform=node --format=cjs --outfile=dist/capture-preload.js && node scripts/copy-electron-assets.cjs && electron-builder --win",
-
     "pack": "electron-builder --dir"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.0",
     "active-win": "^8.1.0",
     "axios": "^1.6.8",
+    "dotenv": "^17.4.2",
     "electron-store": "^8.1.0",
     "form-data": "^4.0.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "socket.io-client": "^4.2.0"
+    "socket.io-client": "^4.2.0",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.6",

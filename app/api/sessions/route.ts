@@ -27,18 +27,32 @@ export async function POST(req: NextRequest) {
   try {
     if (action === 'start') {
       const openRows = await sql`
-        SELECT id, check_in
-        FROM attendance
-        WHERE employee_id = ${user.sub}
-          AND check_out IS NULL
-        ORDER BY check_in DESC
+        SELECT a.id, a.check_in, es.last_activity
+        FROM attendance a
+        LEFT JOIN employee_status es ON es.employee_id = a.employee_id
+        WHERE a.employee_id = ${user.sub}
+          AND a.check_out IS NULL
+        ORDER BY a.check_in DESC
       `;
 
       for (const row of openRows || []) {
+        // If we have a last_activity timestamp after check_in, treat that as
+        // the real end of the stale session (the employee actually worked
+        // until then). Otherwise fall back to check_in itself, so an
+        // abandoned session with no recorded activity counts as 0 minutes
+        // instead of "however long the agent happened to be offline".
+        const effectiveEnd =
+          row.last_activity && new Date(row.last_activity) > new Date(row.check_in)
+            ? row.last_activity
+            : row.check_in;
+
         await sql`
           UPDATE attendance
-          SET check_out = NOW(),
-              total_minutes = FLOOR(EXTRACT(EPOCH FROM (NOW() - ${row.check_in})) / 60)::int,
+          SET check_out = ${effectiveEnd},
+              total_minutes = GREATEST(
+                0,
+                FLOOR(EXTRACT(EPOCH FROM (${effectiveEnd}::timestamptz - check_in)) / 60)::int
+              ),
               status = 'checked_out'
           WHERE id = ${row.id}
         `;
@@ -79,12 +93,14 @@ export async function POST(req: NextRequest) {
         VALUES(${attendance.id}, NOW())
         RETURNING id
       `;
-await sql`
-  UPDATE attendance
-  SET total_minutes =
-    FLOOR(EXTRACT(EPOCH FROM (NOW() - check_in)) / 60)::int
-  WHERE id = ${attendance.id}
-`;
+
+      await sql`
+        UPDATE attendance
+        SET total_minutes =
+          FLOOR(EXTRACT(EPOCH FROM (NOW() - check_in)) / 60)::int
+        WHERE id = ${attendance.id}
+      `;
+
       await sql`
         UPDATE attendance
         SET status = 'on_break'
@@ -140,17 +156,25 @@ await sql`
       return ok({ ok: true });
     }
 
-    if ((action === 'end' || action === 'checkout')) {
-      // sessionId from the client is the attendance.id; fall back to the
-      // most recent open attendance row if it wasn't provided.
+    if (action === 'end' || action === 'checkout') {
+      // sessionId from the client is the attendance.id. We try it first,
+      // but always fall back to "most recent open session for this
+      // employee" if it's missing OR if it no longer matches an open row
+      // (e.g. it was already closed by a stale-session cleanup in
+      // action === 'start', or the agent is holding onto an old/incorrect
+      // id after a reconnect). Without this fallback, a mismatched sessionId
+      // causes a hard 404 and the agent's checkout is silently dropped.
       let attendance;
+
       if (sessionId) {
         [attendance] = await sql`
           SELECT id, check_in FROM attendance
           WHERE id = ${sessionId} AND employee_id = ${user.sub}
           LIMIT 1
         `;
-      } else {
+      }
+
+      if (!attendance) {
         [attendance] = await sql`
           SELECT id, check_in FROM attendance
           WHERE employee_id = ${user.sub} AND check_out IS NULL
@@ -160,32 +184,34 @@ await sql`
       }
 
       if (!attendance) return err('Attendance record not found', 404);
-const breakResult = await sql`
-  SELECT COALESCE(SUM(duration_minutes), 0) AS break_minutes
-  FROM breaks
-  WHERE attendance_id = ${attendance.id}
-`;
 
-const breakMinutes = breakResult?.[0]?.break_minutes ?? 0;
+      const breakResult = await sql`
+        SELECT COALESCE(SUM(duration_minutes), 0) AS break_minutes
+        FROM breaks
+        WHERE attendance_id = ${attendance.id}
+      `;
 
-const minutesResult = await sql`
-  SELECT
-    GREATEST(
-      FLOOR(EXTRACT(EPOCH FROM (NOW() - ${attendance.check_in})) / 60)::int - ${breakMinutes},
-      0
-    ) AS total_minutes
-`;
+      const breakMinutes = breakResult?.[0]?.break_minutes ?? 0;
 
-const minutes = minutesResult?.[0]?.total_minutes ?? 0;
+      const minutesResult = await sql`
+        SELECT
+          GREATEST(
+            FLOOR(EXTRACT(EPOCH FROM (NOW() - ${attendance.check_in})) / 60)::int - ${breakMinutes},
+            0
+          ) AS total_minutes
+      `;
 
-await sql`
-  UPDATE breaks
-  SET
-    end_time = NOW(),
-    duration_minutes = CEIL(EXTRACT(EPOCH FROM (NOW() - start_time)) / 60)::int
-  WHERE attendance_id = ${attendance.id}
-    AND end_time IS NULL
-`;
+      const minutes = minutesResult?.[0]?.total_minutes ?? 0;
+
+      await sql`
+        UPDATE breaks
+        SET
+          end_time = NOW(),
+          duration_minutes = CEIL(EXTRACT(EPOCH FROM (NOW() - start_time)) / 60)::int
+        WHERE attendance_id = ${attendance.id}
+          AND end_time IS NULL
+      `;
+
       await sql`
         UPDATE attendance
         SET check_out = NOW(), total_minutes = ${minutes}, status = 'checked_out'
@@ -231,14 +257,14 @@ await sql`
 
     return err('Invalid action');
   } catch (e: any) {
-  console.error('================ ERROR =================');
-  console.error(e);
-  console.error('MESSAGE:', e?.message);
-  console.error('STACK:', e?.stack);
-  console.error('========================================');
+    console.error('================ ERROR =================');
+    console.error(e);
+    console.error('MESSAGE:', e?.message);
+    console.error('STACK:', e?.stack);
+    console.error('========================================');
 
-  return err(e?.message || 'Internal server error', 500);
-}
+    return err(e?.message || 'Internal server error', 500);
+  }
 }
 
 export async function GET(req: NextRequest) {

@@ -1,6 +1,5 @@
 'use client';
 import React, { useEffect, useState } from 'react';
-import { io } from 'socket.io-client';
 
 declare const window: any;
 
@@ -14,10 +13,6 @@ type AlertRecord = {
   sentAt: string;
   isRead: boolean;
 };
-
-const SOCKET_SERVER_URL = (typeof window !== 'undefined' && window.location?.origin)
-  ? `${window.location.protocol}//${window.location.hostname}:4000`
-  : 'http://127.0.0.1:4000';
 
 const LABELS: Record<AgentStatus, string> = {
   active: 'Active',
@@ -41,7 +36,6 @@ export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [alertsOpen, setAlertsOpen] = useState(false);
-  const [socketConnected, setSocketConnected] = useState(false);
 
   const unreadCount = alerts.filter((alert) => !alert.isRead).length;
 
@@ -152,32 +146,6 @@ export default function App() {
     });
   }, []);
 
-  useEffect(() => {
-    const socket = io(SOCKET_SERVER_URL, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-    });
-
-    socket.on('connect', () => {
-      setSocketConnected(true);
-      socket.emit('register', { role: 'employee', employeeId: employeeId || null });
-    });
-    socket.on('disconnect', () => setSocketConnected(false));
-    socket.on('connect_error', (err:any) => console.error('Socket alert error', err));
-    socket.on('new-alert', async (payload:any) => {
-      const alert = normalizeAlert(payload);
-      await window.agent?.storeAlert(alert);
-    });
-
-    return () => {
-      try {
-        socket.disconnect();
-      } catch (err) {
-        console.warn('Failed to clean up socket alerts', err);
-      }
-    };
-  }, [employeeId]);
 
   return (
     <div style={{ fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif', minHeight:'100vh', background:'radial-gradient(circle at top, #1f2937 0%, #05070b 70%, #020304 100%)', padding:20, color:'#f8fafc' }}>

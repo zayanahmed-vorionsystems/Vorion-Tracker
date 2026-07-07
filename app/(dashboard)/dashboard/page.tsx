@@ -1,18 +1,14 @@
 'use client';
 // app/(dashboard)/dashboard/page.tsx
 import { useEffect, useState, useCallback } from 'react';
-import { io } from 'socket.io-client';
 import { useAuthStore } from '@/store/auth';
+import { supabaseClient } from '@/lib/supabase';
 import { fmtCompact, fmtPrecise, timeAgo } from './timeUtils';
 
 function fmt(secs: number) {
   if (!secs) return '0h 0m';
   return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
 }
-
-const SOCKET_SERVER_URL = (typeof window !== 'undefined' && window.location?.origin)
-  ? `${window.location.protocol}//${window.location.hostname}:4000`
-  : 'http://127.0.0.1:4000';
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
@@ -231,28 +227,29 @@ export default function DashboardPage() {
     return () => clearInterval(id);
   }, [fetchData]);
 
-  // ── Live status updates from the socket server ────────────────────────
+  // ── Live status updates from Supabase Realtime ───────────────────────
   useEffect(() => {
     if (!token || !user?.id) return;
 
-    const socket = io(SOCKET_SERVER_URL, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-    });
-
-    socket.on('connect', () => {
-      socket.emit('register', { role: user?.role || 'admin', employeeId: user?.id || null, token });
-    });
-
-    socket.on('employee-status', updateRowFromSocket);
+    const channel = supabaseClient
+      .channel(`dashboard-status-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'employee_status' }, (payload: any) => {
+        const record = payload?.new ?? payload?.record ?? payload;
+        const employeeId = record?.employee_id ?? record?.employeeId;
+        if (!employeeId) return;
+        updateRowFromSocket({
+          employeeId,
+          status: record?.current_status,
+          lastActivity: record?.last_activity,
+          currentApp: record?.current_app,
+        });
+      })
+      .subscribe();
 
     return () => {
-      try {
-        socket.disconnect();
-      } catch {}
+      channel.unsubscribe();
     };
-  }, [token, user?.id, user?.role, updateRowFromSocket]);
+  }, [token, user?.id, updateRowFromSocket]);
 
   // ── Derived stats ─────────────────────────────────────────────────────
   const active   = rows.filter(r => r.current_status === 'working' || r.current_status === 'on_break').length;

@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { io, Socket } from 'socket.io-client';
 import { useAuthStore, canSendAlerts } from '@/store/auth';
 import { supabaseClient } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
@@ -23,8 +22,16 @@ interface AgentCard {
   lastSeen?: string;
 }
 
-const SOCKET_SERVER_URL = process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || 'http://localhost:4000';
 const STREAM_CONNECT_TIMEOUT_MS = 15000;
+const CHANNEL_SUBSCRIBE_TIMEOUT_MS = 10000;
+
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  { urls: 'turn:global.relay.metered.ca:80', username: '339635db329dc7164bf05f8f', credential: 'e9nkJFUYjEXW7lkq' },
+  { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: '339635db329dc7164bf05f8f', credential: 'e9nkJFUYjEXW7lkq' },
+  { urls: 'turn:global.relay.metered.ca:443', username: '339635db329dc7164bf05f8f', credential: 'e9nkJFUYjEXW7lkq' },
+  { urls: 'turns:global.relay.metered.ca:443?transport=tcp', username: '339635db329dc7164bf05f8f', credential: 'e9nkJFUYjEXW7lkq' },
+];
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
@@ -122,14 +129,44 @@ export default function LiveMonitorPage() {
   const [isEnlarged, setIsEnlarged] = useState(false);
   const router = useRouter();
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const socketRef = useRef<Socket | null>(null);
+  const channelRef = useRef<any>(null);
+  // Tracks the promise that resolves once the current channel is SUBSCRIBED.
+  // We must await this before calling channel.send(), otherwise realtime-js
+  // silently falls back to REST delivery, which the agent never receives.
+  const channelReadyRef = useRef<Promise<void> | null>(null);
+  // Explicit employeeId the current channelRef/channelReadyRef belong to.
+  // We deliberately do NOT parse channel.topic strings to figure this out —
+  // that was fragile and caused a real bug where .on() got called on an
+  // already-subscribed channel object ("cannot add presence callbacks ...
+  // after subscribe()"). Tracking this ourselves is exact and race-free.
+  const channelEmployeeIdRef = useRef<string | null>(null);
+  // Prevents two concurrent calls to ensureChannel() (e.g. a fast double
+  // click, or a manual refresh firing while a reconnect is already in
+  // flight) from both racing to tear down / recreate the channel.
+  const channelSetupInFlightRef = useRef<Promise<{ channel: any; ready: Promise<void> }> | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
+  const adminIdRef = useRef<string>('');
   const activeEmployeeRef = useRef<string | null>(null);
   const selectedEmployeeRef = useRef<Employee | null>(null);
   const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectAttemptsRef = useRef(0);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  // Tracks agent online/offline status per employeeId based on presence sync.
+  // Used to stop endless reconnect/retry loops once we know for certain the
+  // agent's process has gone away (e.g. tracking stopped, app closed),
+  // instead of blindly retrying forever with no feedback to the admin.
+  const agentOnlineRef = useRef<Map<string, boolean>>(new Map());
+  // Only contains employeeIds where we've confirmed a genuine online -> offline
+  // transition (not just "haven't heard from them yet"). Used to gate
+  // reconnect attempts so we don't retry forever once truly confirmed
+  // offline, without being tripped up by the first-sync race condition.
+  const confirmedOfflineRef = useRef<Set<string>>(new Set());
+  // Prevents rapid duplicate requestStream() calls for the same employee
+  // (fast double-click, refresh mashed, reconnect racing a manual click)
+  // from running concurrently. Force-cleared by handleAgentWentOffline() if
+  // an in-flight call never reaches its own cleanup (e.g. pc closed mid-flight).
+  const requestStreamInFlightRef = useRef<string | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<BlobPart[]>([]);
   const recordingStartRef = useRef<number | null>(null);
@@ -153,97 +190,8 @@ export default function LiveMonitorPage() {
   }, [token]);
 
   useEffect(() => {
-    const runtimeUrl = (typeof window !== 'undefined')
-      ? (process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || `${window.location.protocol}//${window.location.hostname}:4000`)
-      : SOCKET_SERVER_URL;
-
-    const socket = io(runtimeUrl, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-    });
-
-    socketRef.current = socket;
-    socket.emit('register', { role: user?.role || 'admin', employeeId: user?.id || null, token });
-
-    socket.on('connect', () => {
-      console.log('Dashboard socket connected', socket.id, 'to', runtimeUrl);
-      socket.emit('register', { role: user?.role || 'admin', employeeId: user?.id || null, token });
-      if (activeEmployeeRef.current && selectedEmployeeRef.current) {
-        console.log('[live-monitor] socket reconnected; restarting stream for', activeEmployeeRef.current);
-        requestStream(activeEmployeeRef.current, selectedEmployeeRef.current.name);
-      }
-    });
-    socket.on('connect_error', (err: any) => console.error('Socket connect_error', err));
-    socket.on('error', (err: any) => console.error('Socket error', err));
-    socket.on('reconnect_attempt', (n: number) => console.log('Socket reconnect attempt', n));
-    socket.on('reconnect_failed', () => console.warn('Socket reconnect failed'));
-
-    socket.on('employee-status', (data: any) => {
-      const agentKey = String(data.employeeId ?? data.agentId ?? 'unknown-agent');
-      setAgents(prev => {
-        const updated = {
-          agentId: agentKey,
-          name: data.userName || data.agentId || 'Employee',
-          status: data.status || 'offline',
-          online: data.status !== 'offline',
-          activeApp: data.activeApp,
-          activityPct: data.activityPct,
-          lastUrl: data.screenshotBase64 ? `data:image/png;base64,${data.screenshotBase64}` : prev.find(item => item.agentId === agentKey)?.lastUrl,
-          lastSeen: data.heartbeat || data.capturedAt || prev.find(item => item.agentId === agentKey)?.lastSeen,
-        };
-        const exists = prev.some(item => item.agentId === agentKey);
-        return exists ? prev.map(item => item.agentId === agentKey ? { ...item, ...updated } : item) : [updated, ...prev];
-      });
-    });
-    socket.on('security-event', (data: any) => {
-      setSecurityEvents(prev => [data, ...prev].slice(0, 8));
-    });
-    socket.on('stream-offer', async ({ employeeId, sdp }: { employeeId: string; sdp: RTCSessionDescriptionInit }) => {
-      console.log('[live-monitor] stream-offer received', { employeeId, hasSdp: Boolean(sdp) });
-      if (activeEmployeeRef.current !== employeeId) return;
-      try {
-        clearConnectTimeout();
-        clearReconnectTimer();
-        connectAttemptsRef.current = 0;
-        const pc = peerRef.current ?? createPeerConnection(employeeId);
-        await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-        console.log('[live-monitor] remote description set');
-        const answer = await pc.createAnswer();
-        console.log('[live-monitor] createAnswer');
-        await pc.setLocalDescription(answer);
-        console.log('[live-monitor] answer sent');
-        console.log('[live-monitor] emitting stream-answer', { employeeId, adminId: socket.id, hasSdp: Boolean(answer) });
-        socket.emit('stream-answer', { employeeId, adminId: socket.id, sdp: answer });
-        console.log('[live-monitor] stream-answer emitted');
-        setStreamState('Connected');
-        setIsConnectingStream(false);
-        setIsStreaming(true);
-        setStreamError(null);
-      } catch (err: any) {
-        console.error('Failed to answer stream offer', err);
-        setStreamError(err.message || 'Failed to answer stream offer');
-      }
-    });
-    socket.on('ice-candidate', async ({ candidate }: { candidate: RTCIceCandidateInit }) => {
-      console.log('[live-monitor] ICE candidate received');
-      if (!peerRef.current || !candidate) return;
-      try {
-        await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (err) {
-        console.warn('Ignored ICE candidate error', err);
-      }
-    });
-    socket.on('stop-stream', ({ employeeId }: { employeeId?: string }) => {
-      if (!employeeId || employeeId !== activeEmployeeRef.current) return;
-      stopStream();
-    });
-
-    return () => {
-      stopStream();
-      socket.disconnect();
-    };
-  }, [user?.id, user?.role]);
+    adminIdRef.current = user?.id || `admin-${Math.random().toString(36).slice(2, 10)}`;
+  }, [user?.id]);
 
   useEffect(() => {
     const channel = supabaseClient
@@ -257,7 +205,7 @@ export default function LiveMonitorPage() {
             agentId: agentKey,
             name: prev.find(item => item.agentId === agentKey)?.name || record.employee_id,
             status: record.current_status || 'offline',
-            online: record.current_status !== 'offline',
+            online: record.current_status === 'active',
             activeApp: record.current_app ?? undefined,
             activityPct: undefined,
             lastUrl: prev.find(item => item.agentId === agentKey)?.lastUrl,
@@ -310,6 +258,14 @@ export default function LiveMonitorPage() {
     return Boolean(pc && pc.connectionState !== 'closed' && pc.connectionState !== 'failed');
   }
 
+  function serializeSessionDescription(description: RTCSessionDescriptionInit | null | undefined) {
+    if (!description) return undefined;
+    return {
+      type: description.type,
+      sdp: description.sdp,
+    };
+  }
+
   function markStreamActive() {
     setStreamState('Connected');
     setIsConnectingStream(false);
@@ -331,23 +287,90 @@ export default function LiveMonitorPage() {
     markStreamActive();
   }, [selectedEmployee?.id, isEnlarged]);
 
+  useEffect(() => {
+    if (employees.length === 0) return;
+    (async () => {
+      try {
+        const { data, error } = await supabaseClient
+          .from('employee_status')
+          .select('*');
+
+        if (error) {
+          console.error('[live-monitor] failed to load initial employee_status', error);
+          return;
+        }
+
+        const statusByEmployeeId = new Map(
+          (data || []).map((row: any) => [String(row.employee_id), row])
+        );
+
+        // Har employee ke liye card banao — chahe employee_status me row ho ya na ho
+        // (agar row nahi hai, to matlab wo employee kabhi online hi nahi hua — offline dikhao)
+        const initialAgents: AgentCard[] = employees.map((emp) => {
+          const row = statusByEmployeeId.get(emp.id);
+          return {
+            agentId: emp.id,
+            name: emp.name,
+            status: row?.current_status || 'offline',
+            online: row ? row.current_status === 'active' : false,
+            activeApp: row?.current_app ?? undefined,
+            lastSeen: row?.last_activity,
+          };
+        });
+
+        setAgents(initialAgents);
+      } catch (err) {
+        console.error('[live-monitor] error loading initial agent status', err);
+      }
+    })();
+  }, [employees]);
+
+  function handleAgentWentOffline(employeeId: string) {
+    console.log('[live-monitor] agent went offline, stopping reconnect attempts', { employeeId });
+    clearConnectTimeout();
+    clearReconnectTimer();
+    connectAttemptsRef.current = 0;
+    peerRef.current?.close();
+    peerRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    remoteStreamRef.current = null;
+    setIsStreaming(false);
+    setIsConnectingStream(false);
+    setStreamState('Offline');
+    setStreamError("This employee's agent went offline. Reconnect automatically once it's back online.");
+    // A requestStream() call that was still in flight when this offline
+    // event arrived (e.g. its pc got closed mid-createOffer) may never
+    // reach its own `finally` cleanup. Force-clear the guard here so future
+    // clicks/retries for this employee aren't blocked forever.
+    if (requestStreamInFlightRef.current === employeeId) {
+      requestStreamInFlightRef.current = null;
+    }
+  }
+
   function scheduleReconnect(reason: string) {
-    if (!selectedEmployeeRef.current || !socketRef.current || !activeEmployeeRef.current) return;
+    if (!selectedEmployeeRef.current || !channelRef.current || !activeEmployeeRef.current) return;
     if (reconnectTimeoutRef.current) return;
+    // Don't blindly retry forever if we already know the agent is offline —
+    // wait for a presence sync event to tell us it's back instead.
+    if (agentOnlineRef.current.get(activeEmployeeRef.current) === false) {
+      console.log('[live-monitor] skipping reconnect — agent known to be offline', { employeeId: activeEmployeeRef.current });
+      return;
+    }
     console.log('[live-monitor] scheduling reconnect', { reason, employeeId: activeEmployeeRef.current });
     reconnectTimeoutRef.current = setTimeout(() => {
       reconnectTimeoutRef.current = null;
       if (activeEmployeeRef.current && selectedEmployeeRef.current) {
-        requestStream(activeEmployeeRef.current, selectedEmployeeRef.current.name);
+        void requestStream(activeEmployeeRef.current, selectedEmployeeRef.current.name);
       }
     }, 1800);
   }
 
   function createPeerConnection(employeeId: string) {
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      iceServers: ICE_SERVERS,
     });
-
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    
     pc.ontrack = (event) => {
       console.log('[live-monitor] ontrack fired', { streamCount: event.streams.length, trackKind: event.track.kind });
       const stream = event.streams[0];
@@ -391,14 +414,17 @@ export default function LiveMonitorPage() {
     };
 
     pc.onicecandidate = (event) => {
-      if (event.candidate && socketRef.current) {
+      if (event.candidate && channelRef.current) {
         console.log('[live-monitor] ICE candidate sent');
-        console.log('[live-monitor] emitting ice-candidate', { employeeId, adminId: socketRef.current.id, from: 'admin' });
-        socketRef.current.emit('ice-candidate', {
-          employeeId,
-          adminId: socketRef.current.id,
-          candidate: event.candidate.toJSON(),
-          from: 'admin',
+        void channelRef.current.send({
+          type: 'broadcast',
+          event: 'ice-candidate',
+          payload: {
+            employeeId,
+            adminId: adminIdRef.current,
+            candidate: event.candidate.toJSON(),
+            from: 'admin',
+          },
         });
       }
     };
@@ -410,8 +436,12 @@ export default function LiveMonitorPage() {
   function stopStream() {
     clearConnectTimeout();
     clearReconnectTimer();
-    if (socketRef.current && activeEmployeeRef.current) {
-      socketRef.current.emit('stop-stream', { employeeId: activeEmployeeRef.current, adminId: socketRef.current.id });
+    if (channelRef.current && activeEmployeeRef.current) {
+      void channelRef.current.send({
+        type: 'broadcast',
+        event: 'stop-stream',
+        payload: { employeeId: activeEmployeeRef.current, adminId: adminIdRef.current },
+      });
     }
     peerRef.current?.close();
     peerRef.current = null;
@@ -427,8 +457,238 @@ export default function LiveMonitorPage() {
     setStreamError(null);
   }
 
+  /**
+   * Returns the channel for this employee, plus a `ready` promise that
+   * resolves once the channel has finished SUBSCRIBED. Callers MUST await
+   * `ready` before calling channel.send() — sending before SUBSCRIBED causes
+   * realtime-js to silently fall back to REST delivery, which the Electron
+   * agent's websocket listener never sees.
+   *
+   * This function is safe to call multiple times in quick succession (fast
+   * double clicks, a manual refresh racing a reconnect, etc). Identity is
+   * tracked explicitly via channelEmployeeIdRef rather than by parsing
+   * channel.topic strings, and concurrent setup calls are serialized via
+   * channelSetupInFlightRef so we never call .on() on a channel object that
+   * has already had .subscribe() called on it.
+   */
+  async function ensureChannel(employeeId: string): Promise<{ channel: any; ready: Promise<void> }> {
+    // If another ensureChannel() call for this employeeId is already in
+    // flight, just wait for it instead of racing to create a second channel.
+    if (channelSetupInFlightRef.current && channelEmployeeIdRef.current === employeeId) {
+      return channelSetupInFlightRef.current;
+    }
+
+    // Already have a live/ready channel for this exact employee — reuse it.
+    if (channelRef.current && channelEmployeeIdRef.current === employeeId && channelReadyRef.current) {
+      return { channel: channelRef.current, ready: channelReadyRef.current };
+    }
+
+    // If a previous channel exists but is no longer usable, tear it down before creating a new one.
+    if (channelRef.current && channelEmployeeIdRef.current !== employeeId) {
+      try {
+        await channelRef.current.unsubscribe();
+      } catch (err) {
+        console.warn('[live-monitor] error unsubscribing previous channel before reuse', err);
+      }
+      channelRef.current = null;
+      channelReadyRef.current = null;
+      channelEmployeeIdRef.current = null;
+    }
+
+    const setupPromise = (async () => {
+      // Tear down any previous channel (different employee, or a stale one).
+      if (channelRef.current) {
+        try {
+          await channelRef.current.unsubscribe();
+        } catch (err) {
+          console.warn('[live-monitor] error unsubscribing previous channel', err);
+        }
+        channelRef.current = null;
+        channelReadyRef.current = null;
+        channelEmployeeIdRef.current = null;
+      }
+
+      // NOTE: `private: true` and `broadcast.ack: true` MUST match the
+      // Electron agent's channel config exactly, or the two sides will not
+      // see each other's broadcasts despite sharing a topic name.
+      const channel = supabaseClient.channel(`live-${employeeId}`, {
+        config: {
+          broadcast: { self: false, ack: true },
+          presence: { key: adminIdRef.current || 'admin' },
+          private: true,
+        },
+      });
+
+      // Register listeners before subscribing so the channel is fully wired up.
+      // Re-adding listeners after subscribe() throws the error shown in the logs.
+      channel.on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState();
+        const presentAgents = Object.values(state as Record<string, any[]>).flat();
+        const online = presentAgents.some((entry: any) => entry?.online);
+        // The FIRST presence sync right after subscribing can legitimately
+        // come back empty even though the agent is online — there's a race
+        // between our subscribe completing and the agent's own .track()
+        // call reaching the server. Treat that as "not yet known" rather
+        // than "confirmed offline", and only fire handleAgentWentOffline()
+        // on a genuine online -> offline transition.
+        const previouslyKnownOnline = agentOnlineRef.current.get(employeeId);
+        agentOnlineRef.current.set(employeeId, online);
+        setAgents(prev => prev.map((item) => item.agentId === employeeId ? { ...item, online } : item));
+        if (!online && previouslyKnownOnline === true && activeEmployeeRef.current === employeeId) {
+          handleAgentWentOffline(employeeId);
+        }
+      });
+
+      channel.on('broadcast', { event: 'offer' }, async ({ payload }: { payload: any }) => {
+        if (payload?.from !== 'agent' || payload?.employeeId !== employeeId) return;
+        console.log('[live-monitor] stream-offer received', { employeeId, hasSdp: Boolean(payload?.sdp) });
+        try {
+          clearConnectTimeout();
+          clearReconnectTimer();
+          connectAttemptsRef.current = 0;
+          const pc = peerRef.current ?? createPeerConnection(employeeId);
+          await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          const localDescription = pc.localDescription;
+          const result = await channel.send({
+            type: 'broadcast',
+            event: 'answer',
+            payload: { employeeId, adminId: adminIdRef.current, from: 'admin', sdp: serializeSessionDescription(localDescription) ?? serializeSessionDescription(answer) },
+          });
+          console.log('[live-monitor] send answer result:', result);
+          if (result !== 'ok') {
+            setStreamError(`Failed to send answer: ${result}`);
+          }
+          setStreamState('Connected');
+          setIsConnectingStream(false);
+          setIsStreaming(true);
+          setStreamError(null);
+        } catch (err: any) {
+          console.error('Failed to answer stream offer', err);
+          setStreamError(err.message || 'Failed to answer stream offer');
+        }
+      });
+
+      channel.on('broadcast', { event: 'answer' }, async ({ payload }: { payload: any }) => {
+        if (payload?.from !== 'agent' || payload?.employeeId !== employeeId) return;
+        console.log('[live-monitor] answer received from agent', { employeeId, hasSdp: Boolean(payload?.sdp) });
+        const pc = peerRef.current;
+        if (!pc) {
+          console.warn('[live-monitor] received answer but no active peer connection exists');
+          return;
+        }
+        if (pc.signalingState !== 'have-local-offer') {
+          console.warn('[live-monitor] ignoring answer — unexpected signalingState', pc.signalingState);
+          return;
+        }
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+          console.log('[live-monitor] remote description (answer) applied successfully');
+          clearConnectTimeout();
+          clearReconnectTimer();
+          connectAttemptsRef.current = 0;
+        } catch (err: any) {
+          console.error('[live-monitor] failed to apply remote answer', err);
+          setStreamError(err?.message || 'Failed to apply remote answer');
+        }
+      });
+
+      channel.on('broadcast', { event: 'ice-candidate' }, async ({ payload }: { payload: any }) => {
+        if (payload?.from !== 'agent' || payload?.employeeId !== employeeId) return;
+        if (!peerRef.current || !payload?.candidate) return;
+        try {
+          await peerRef.current.addIceCandidate(new RTCIceCandidate(payload.candidate));
+        } catch (err) {
+          console.warn('Ignored ICE candidate error', err);
+        }
+      });
+
+      channel.on('broadcast', { event: 'stop-stream' }, ({ payload }: { payload: any }) => {
+        if (payload?.employeeId !== employeeId) return;
+        stopStream();
+      });
+
+      const ready = new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error('Channel subscribe timed out'));
+        }, CHANNEL_SUBSCRIBE_TIMEOUT_MS);
+
+        channel.subscribe((status: string, err?: Error) => {
+          console.log('[live-monitor] channel status:', status, err ? `error: ${err.message}` : '');
+          if (status === 'SUBSCRIBED') {
+            clearTimeout(timeout);
+            void channel.track({ online: true, adminId: adminIdRef.current, role: user?.role || 'admin' });
+            resolve();
+          }
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            clearTimeout(timeout);
+            reject(new Error(`Channel subscribe failed: ${status}${err ? ` (${err.message})` : ''}`));
+          }
+        });
+      });
+
+      channelRef.current = channel;
+      channelReadyRef.current = ready;
+      channelEmployeeIdRef.current = employeeId;
+
+      // Don't let an unhandled rejection from `ready` crash anything —
+      // callers of ensureChannel await it themselves and handle errors.
+      ready.catch(() => {});
+
+      return { channel, ready };
+    })();
+
+    channelSetupInFlightRef.current = setupPromise;
+    try {
+      return await setupPromise;
+    } finally {
+      // Only clear the in-flight marker if it's still ours (a newer call
+      // may have already replaced it).
+      if (channelSetupInFlightRef.current === setupPromise) {
+        channelSetupInFlightRef.current = null;
+      }
+    }
+  }
+
   async function requestStream(employeeId: string, employeeName: string) {
-    if (!socketRef.current) return;
+    // Guard against rapid duplicate calls for the same employee (fast
+    // double-click, refresh button mashed, reconnect racing a manual click).
+    if (requestStreamInFlightRef.current === employeeId) {
+      console.log('[live-monitor] requestStream already in flight for', employeeId, '— ignoring duplicate call');
+      return;
+    }
+    requestStreamInFlightRef.current = employeeId;
+
+    let channel: any;
+    let ready: Promise<void>;
+    try {
+      ({ channel, ready } = await ensureChannel(employeeId));
+    } catch (err: any) {
+      console.error('[live-monitor] failed to set up channel', err);
+      requestStreamInFlightRef.current = null;
+      setSelectedEmployee({ id: employeeId, name: employeeName });
+      selectedEmployeeRef.current = { id: employeeId, name: employeeName };
+      setStreamError('Could not connect to the signaling channel. Check RLS policies / connector permissions.');
+      setStreamState('Error');
+      return;
+    }
+
+    // Critical fix: wait for the channel to finish SUBSCRIBED before sending
+    // anything. Sending too early causes realtime-js to silently fall back
+    // to REST delivery ("Realtime send() is automatically falling back to
+    // REST API...") which the agent's websocket listener never receives.
+    try {
+      await ready;
+    } catch (err: any) {
+      requestStreamInFlightRef.current = null;
+      console.error('[live-monitor] channel not ready, cannot request stream', err);
+      setSelectedEmployee({ id: employeeId, name: employeeName });
+      selectedEmployeeRef.current = { id: employeeId, name: employeeName };
+      setStreamError('Could not connect to the signaling channel. Check RLS policies / connector permissions.');
+      setStreamState('Error');
+      return;
+    }
 
     clearReconnectTimer();
     if (activeEmployeeRef.current === employeeId && hasLiveRemoteStream() && hasActivePeerConnection()) {
@@ -437,6 +697,8 @@ export default function LiveMonitorPage() {
       activeEmployeeRef.current = employeeId;
       attachRemoteStream(remoteStreamRef.current);
       markStreamActive();
+      console.log('[live-monitor] stream already in progress, skipping duplicate request', { employeeId });
+      requestStreamInFlightRef.current = null;
       return;
     }
 
@@ -454,17 +716,48 @@ export default function LiveMonitorPage() {
 
     const pc = createPeerConnection(employeeId);
     peerRef.current = pc;
-    console.log('[live-monitor] emitting stream-request', { employeeId, adminId: socketRef.current.id, attempt: connectAttemptsRef.current + 1 });
-    socketRef.current.emit('stream-request', { employeeId, adminId: socketRef.current.id });
-    console.log('[live-monitor] stream-request emitted');
+
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const localDescription = pc.localDescription;
+      const result = await channel.send({
+        type: 'broadcast',
+        event: 'offer',
+        payload: { employeeId, adminId: adminIdRef.current, from: 'admin', sdp: serializeSessionDescription(localDescription) ?? serializeSessionDescription(offer) },
+      });
+      console.log('[live-monitor] send offer result:', result);
+      if (result !== 'ok') {
+        console.error('[live-monitor] ❌ Offer broadcast failed — likely RLS policy or channel mismatch:', result);
+        setStreamError(`Offer send failed: ${result}`);
+      }
+    } catch (err) {
+      console.error('Failed to create stream offer', err);
+      setStreamError('Unable to start the live stream.');
+      setStreamState('Error');
+      setIsConnectingStream(false);
+    } finally {
+      requestStreamInFlightRef.current = null;
+    }
 
     clearConnectTimeout();
     connectTimeoutRef.current = setTimeout(() => {
       if (activeEmployeeRef.current === employeeId && !isStreaming) {
+        if (agentOnlineRef.current.get(employeeId) === false) {
+          console.log('[live-monitor] not retrying — agent known to be offline', { employeeId });
+          handleAgentWentOffline(employeeId);
+          return;
+        }
         if (connectAttemptsRef.current < 1) {
           connectAttemptsRef.current += 1;
           console.log('[live-monitor] retrying stream-request automatically', { employeeId });
-          socketRef.current?.emit('stream-request', { employeeId, adminId: socketRef.current.id });
+          void channel.send({
+            type: 'broadcast',
+            event: 'offer',
+            payload: { employeeId, adminId: adminIdRef.current, from: 'admin', sdp: serializeSessionDescription(pc.localDescription) },
+          }).then((result: string) => {
+            console.log('[live-monitor] retry send offer result:', result);
+          });
           return;
         }
         setStreamError('No response from agent. It may be offline or unreachable.');
@@ -475,7 +768,7 @@ export default function LiveMonitorPage() {
   }
 
   async function startRecording() {
-    if (!remoteStreamRef.current || !selectedEmployeeRef.current || !socketRef.current) return;
+    if (!remoteStreamRef.current || !selectedEmployeeRef.current) return;
     try {
       if (recorderRef.current && recorderRef.current.state !== 'inactive') {
         recorderRef.current.stop();
@@ -502,7 +795,7 @@ export default function LiveMonitorPage() {
         const durationMs = Date.now() - (recordingStartRef.current || Date.now());
         const formData = new FormData();
         formData.append('employeeId', selectedEmployeeRef.current?.id || '');
-        formData.append('adminId', socketRef.current?.id || '');
+        formData.append('adminId', adminIdRef.current || '');
         formData.append('startTime', new Date(recordingStartRef.current || Date.now()).toISOString());
         formData.append('endTime', new Date().toISOString());
         formData.append('duration', String(Math.max(1, Math.round(durationMs / 1000))));
@@ -680,7 +973,7 @@ export default function LiveMonitorPage() {
               onClick={() => {
                 if (!agent.online) return;
                 setSelectedEmployee({ id: agent.agentId, name: agent.name });
-                requestStream(agent.agentId, agent.name);
+                void requestStream(agent.agentId, agent.name);
               }}
               style={{
                 border: `1px solid ${agent.online ? 'rgba(34,197,94,.3)' : 'rgba(248,250,252,.08)'}`,
@@ -749,7 +1042,7 @@ export default function LiveMonitorPage() {
             setSelectedEmployee(null);
             setIsEnlarged(false);
           }}
-          onRefresh={() => selectedEmployee && requestStream(selectedEmployee.id, selectedEmployee.name)}
+          onRefresh={() => selectedEmployee && void requestStream(selectedEmployee.id, selectedEmployee.name)}
           onStartRecording={startRecording}
           onStopRecording={stopRecording}
           onFullscreen={toggleEnlarge}
