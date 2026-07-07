@@ -70,7 +70,7 @@ function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> 
     path.join(process.resourcesPath || __dirname, 'app.asar.unpacked', 'src', 'capture.html'),
   ].filter((candidate, index, list) => list.indexOf(candidate) === index);
   const captureHtmlPath = candidateHtmlPaths.find((candidate) => fs.existsSync(candidate));
-  
+
   if (!captureHtmlPath) {
     console.error('[live-watch] capture.html not found. Tried paths:', candidateHtmlPaths);
   }
@@ -123,12 +123,12 @@ function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> 
   });
   windowReadyPromise = ready;
   captureWindowReady = false;
-  
+
   if (!captureHtmlPath) {
     logErrorWithStack('[AGENT][ERR] Cannot load capture window - HTML path not found', new Error('Capture HTML path resolution failed'));
     return { win, ready };
   }
-  
+
   win.loadFile(captureHtmlPath).catch((err) => {
     if (win.isDestroyed()) {
       return;
@@ -193,8 +193,9 @@ function ensureChannel(employeeId: string) {
   if (liveChannel && liveChannelEmployeeId === employeeId) {
     return liveChannel;
   }
-
-  liveChannel?.unsubscribe();
+  if (liveChannel) {
+    supabaseClient.removeChannel(liveChannel);
+  }
 
   // NOTE: `private: true` and `broadcast.ack: true` MUST match the admin
   // dashboard's channel config exactly, otherwise the two sides won't be
@@ -250,15 +251,36 @@ function ensureChannel(employeeId: string) {
     }
   });
 
+  // ───────────────────────────────────────────────────────────────────────
+  // FIX: previously this only logged on CHANNEL_ERROR/TIMED_OUT and never
+  // recovered — a single dropped socket (network blip, idle timeout, laptop
+  // sleep/wake) meant the channel sat dead forever and the agent silently
+  // stopped receiving offers. Now we tear down and retry after a short
+  // delay, guarding against a stale callback racing a newer channel that
+  // ensureChannel() may have already created.
+  // ───────────────────────────────────────────────────────────────────────
   channel.subscribe((status, err) => {
     console.log('[AGENT] Realtime channel status:', status, err ? `error: ${err.message || err}` : '');
     if (status === 'SUBSCRIBED') {
       channel.track({ online: true, employeeId, updatedAt: Date.now() });
     }
-    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-      console.error('[AGENT][ERR] Channel subscribe failed — this is very likely an RLS policy blocking ' +
-        'this connection. Check that SUPABASE_SERVICE_ROLE_KEY is set, or that auth.uid() based policies ' +
-        'allow this connection.');
+    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+      console.error(
+        '[AGENT][ERR] Channel subscribe failed, will retry in 3s:', status,
+        err ? `(${err.message || err})` : '(if this repeats, it is very likely an RLS policy blocking this ' +
+          'connection — check that SUPABASE_SERVICE_ROLE_KEY is set, or that auth.uid()-based policies allow it)'
+      );
+      // Only tear down/retry if this callback still belongs to the
+      // "current" channel. ensureChannel() may have already replaced
+      // liveChannel by the time this fires (e.g. setupLiveWatch called
+      // again for a different employee) — in that case, do nothing and let
+      // the newer channel's own subscribe callback own retries.
+      if (liveChannel === channel) {
+        supabaseClient.removeChannel(channel);
+        liveChannel = null;
+        liveChannelEmployeeId = null;
+        setTimeout(() => ensureChannel(employeeId), 3000);
+      }
     }
   });
 
@@ -268,7 +290,7 @@ function ensureChannel(employeeId: string) {
 }
 
 export function setupLiveWatch(employeeId: string) {
-  const channel = ensureChannel(employeeId);
+  ensureChannel(employeeId); // channel is stored in liveChannel; no need to keep a local reference
 
   if (!listenersBound) {
     listenersBound = true;
@@ -278,10 +300,14 @@ export function setupLiveWatch(employeeId: string) {
     });
 
     ipcMain.on('live-watch:answer', async (_event, { adminId, sdp }) => {
-      const result = await channel.send({
+      if (!liveChannel) {
+        console.error('[AGENT][ERR] No active channel to send answer on');
+        return;
+      }
+      const result = await liveChannel.send({
         type: 'broadcast',
         event: 'answer',
-        payload: { employeeId, adminId, from: 'agent', sdp },
+        payload: { employeeId: liveChannelEmployeeId, adminId, from: 'agent', sdp },
       });
       console.log('[AGENT] send answer result:', result);
       if (result !== 'ok') {
@@ -290,10 +316,14 @@ export function setupLiveWatch(employeeId: string) {
     });
 
     ipcMain.on('live-watch:ice-candidate', async (_event, { adminId, candidate }) => {
-      const result = await channel.send({
+      if (!liveChannel) {
+        console.error('[AGENT][ERR] No active channel to send ICE candidate on');
+        return;
+      }
+      const result = await liveChannel.send({
         type: 'broadcast',
         event: 'ice-candidate',
-        payload: { employeeId, adminId, from: 'agent', candidate },
+        payload: { employeeId: liveChannelEmployeeId, adminId, from: 'agent', candidate },
       });
       if (result !== 'ok') {
         console.error('[AGENT][ERR] Failed to send ICE candidate to admin:', result);
@@ -301,7 +331,6 @@ export function setupLiveWatch(employeeId: string) {
     });
   }
 }
-
 export function teardownLiveWatch() {
   activeAdminIds.clear();
   if (captureWindow && !captureWindow.isDestroyed()) {
@@ -311,7 +340,9 @@ export function teardownLiveWatch() {
   captureWindow = null;
   windowReadyPromise = null;
   captureWindowReady = false;
-  liveChannel?.unsubscribe();
+   if (liveChannel) {
+    supabaseClient.removeChannel(liveChannel);  // was: liveChannel?.unsubscribe();
+  }
   liveChannel = null;
   liveChannelEmployeeId = null;
 }

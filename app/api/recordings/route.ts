@@ -2,13 +2,21 @@
 import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
-import { supabaseAdmin } from '@/lib/supabase';
+import { assertSupabaseAdmin } from '@/lib/supabase';
 import { emitSocketEvent } from '@/lib/socket';
 
 export async function POST(req: NextRequest) {
   if (!process.env.DATABASE_URL) return err('Server misconfigured: DATABASE_URL not set', 500);
   const user = requireAuth(req);
   if ('status' in user) return user;
+
+  let admin;
+  try {
+    admin = assertSupabaseAdmin();
+  } catch (e: any) {
+    console.error('[recordings] Supabase admin unavailable:', e?.message || e);
+    return err(e?.message || 'Server misconfigured: Supabase admin unavailable', 500);
+  }
 
   const formData   = await req.formData();
   const file       = formData.get('recording') as File | null;
@@ -22,7 +30,7 @@ export async function POST(req: NextRequest) {
   const buffer      = Buffer.from(arrayBuffer);
   const filePath    = `recordings/${user.sub}/${Date.now()}.webm`;
 
-  const { error: uploadError } = await supabaseAdmin.storage
+  const { error: uploadError } = await admin.storage
     .from('recordings')
     .upload(filePath, buffer, { contentType: file.type || 'audio/webm' });
 
@@ -31,7 +39,7 @@ export async function POST(req: NextRequest) {
     return err('Failed to upload recording', 500);
   }
 
-  const publicUrl = supabaseAdmin.storage.from('recordings').getPublicUrl(filePath).data?.publicUrl || '';
+  const publicUrl = admin.storage.from('recordings').getPublicUrl(filePath).data?.publicUrl || '';
 
   try {
     const [rec] = await sql`

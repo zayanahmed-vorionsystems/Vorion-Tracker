@@ -12,9 +12,16 @@ import fs     from 'fs';
 import os     from 'os';
 import https  from 'https';
 import http   from 'http';
+// FIX: teardownLiveWatch must be imported from './live-watch' — the real
+// implementation there calls supabaseClient.removeChannel(liveChannel).
+// A local no-op function with the same name used to be declared further
+// down in this file, which shadowed this import and meant the real channel
+// was never torn down on stopTracking()/logout, leaving an orphaned,
+// still-subscribed channel behind every time.
 import { setupLiveWatch, teardownLiveWatch } from './live-watch';
 import type { IncomingMessage } from 'http';
 import { syncProxyBlock, removeProxyBlock } from './websiteBlock';
+
 // ─── Config ────────────────────────────────────────────────────────────────
 const isDev      = !app.isPackaged;
 const SERVER_URL = process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || (isDev ? 'http://127.0.0.1:3000' : 'https://vorion-tracker-rosy.vercel.app/');
@@ -486,16 +493,33 @@ function closeAllStreams() {
   streamWindow = null;
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// FIX: previously `liveWatchStarted = true` was set unconditionally, before
+// checking whether `employeeId` was actually populated yet. Because
+// employeeId is restored asynchronously (via the GET /api/auth call in
+// app.whenReady()), it's very possible for startTracking() -> initializeSocket()
+// to run once with employeeId still '' — the `if (employeeId)` guard would
+// skip setupLiveWatch(), but the flag was already latched to `true`, so
+// every subsequent call became a permanent no-op. The live-watch channel
+// then never got created for the rest of that process's life, even after
+// employeeId became available moments later.
+//
+// Now we only latch `liveWatchStarted` once we've actually called
+// setupLiveWatch() with a real employeeId, so a call made too early can be
+// safely retried later (e.g. once boot-time identity restore finishes, or
+// the next time startTracking() runs).
+// ─────────────────────────────────────────────────────────────────────────
 let liveWatchStarted = false;
 
 async function initializeSocket() {
   if (liveWatchStarted) return;
-
-  liveWatchStarted = true;
-  if (employeeId) {
-    console.log('[AGENT] setupLiveWatch called from main.ts', { employeeId });
-    setupLiveWatch(employeeId);
+  if (!employeeId) {
+    console.warn('[AGENT] initializeSocket called before employeeId was available — will retry once identity is known');
+    return;
   }
+  liveWatchStarted = true;
+  console.log('[AGENT] setupLiveWatch called from main.ts', { employeeId });
+  setupLiveWatch(employeeId);
 }
 
 console.log('WorkTrack agent using SERVER_URL=', SERVER_URL);
@@ -675,6 +699,7 @@ ipcMain.handle('login', async (_e, email:string, password:string) => {
 
     if (employeeId) {
       setupLiveWatch(employeeId);
+      liveWatchStarted = true; // keep initializeSocket()'s latch in sync with this direct call
     }
     status = 'offline';
     mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
@@ -746,6 +771,12 @@ app.whenReady().then(async ()=>{
       console.log('[AUTH] restored session identity', { employeeId, userName, hasToken: Boolean(token) });
       status = 'offline';
       mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
+      // FIX: employeeId may not have been available yet if startTracking()
+      // already ran (e.g. auto-start) and called initializeSocket() while
+      // employeeId was still ''. Call it again now that identity restore
+      // has completed — initializeSocket() is a safe no-op if the live-watch
+      // channel was already set up, and will proceed if it wasn't.
+      void initializeSocket();
     } catch {
       console.log('Stored token invalid/expired — clearing, user must log in again');
       token=''; userName=''; employeeId='';

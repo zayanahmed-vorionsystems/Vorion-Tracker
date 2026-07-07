@@ -152,6 +152,7 @@ export default function LiveMonitorPage() {
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectAttemptsRef = useRef(0);
   const remoteStreamRef = useRef<MediaStream | null>(null);
+  const isStreamingRef = useRef(false);
   // Tracks agent online/offline status per employeeId based on presence sync.
   // Used to stop endless reconnect/retry loops once we know for certain the
   // agent's process has gone away (e.g. tracking stopped, app closed),
@@ -233,6 +234,28 @@ export default function LiveMonitorPage() {
     return () => { channel.unsubscribe(); };
   }, []);
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // FIX: real-unmount cleanup for the WebRTC/signaling channel refs.
+  // Previously only the employee-status-channel effect above had a cleanup;
+  // channelRef/channelReadyRef/channelEmployeeIdRef were never torn down on
+  // unmount. On a genuine navigation away (and, in dev, on Fast Refresh
+  // remounts) the Supabase channel object stayed subscribed in the
+  // background even though our refs pointed at nothing. Combined with the
+  // orphan-channel guard in ensureChannel() below, this makes sure we don't
+  // leak a live, listener-attached channel every time this component goes
+  // away or gets remounted.
+  // ─────────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      if (channelRef.current) {
+        supabaseClient.removeChannel(channelRef.current);
+        channelRef.current = null;
+        channelReadyRef.current = null;
+        channelEmployeeIdRef.current = null;
+      }
+    };
+  }, []);
+
   function clearConnectTimeout() {
     if (connectTimeoutRef.current) {
       clearTimeout(connectTimeoutRef.current);
@@ -253,6 +276,10 @@ export default function LiveMonitorPage() {
     return stream.getTracks().some(track => track.readyState === 'live');
   }
 
+  function hasStreamConnected() {
+    return hasLiveRemoteStream() || Boolean(peerRef.current && (peerRef.current.connectionState === 'connected' || peerRef.current.remoteDescription));
+  }
+
   function hasActivePeerConnection() {
     const pc = peerRef.current;
     return Boolean(pc && pc.connectionState !== 'closed' && pc.connectionState !== 'failed');
@@ -270,6 +297,7 @@ export default function LiveMonitorPage() {
     setStreamState('Connected');
     setIsConnectingStream(false);
     setIsStreaming(true);
+    isStreamingRef.current = true;
     setStreamError(null);
   }
 
@@ -335,6 +363,7 @@ export default function LiveMonitorPage() {
     if (videoRef.current) videoRef.current.srcObject = null;
     remoteStreamRef.current = null;
     setIsStreaming(false);
+    isStreamingRef.current = false;
     setIsConnectingStream(false);
     setStreamState('Offline');
     setStreamError("This employee's agent went offline. Reconnect automatically once it's back online.");
@@ -370,7 +399,7 @@ export default function LiveMonitorPage() {
       iceServers: ICE_SERVERS,
     });
     pc.addTransceiver('video', { direction: 'recvonly' });
-    
+
     pc.ontrack = (event) => {
       console.log('[live-monitor] ontrack fired', { streamCount: event.streams.length, trackKind: event.track.kind });
       const stream = event.streams[0];
@@ -452,11 +481,11 @@ export default function LiveMonitorPage() {
     activeEmployeeRef.current = null;
     selectedEmployeeRef.current = null;
     setIsStreaming(false);
+    isStreamingRef.current = false;
     setIsConnectingStream(false);
     setStreamState('Idle');
     setStreamError(null);
   }
-
   /**
    * Returns the channel for this employee, plus a `ready` promise that
    * resolves once the channel has finished SUBSCRIBED. Callers MUST await
@@ -486,9 +515,9 @@ export default function LiveMonitorPage() {
     // If a previous channel exists but is no longer usable, tear it down before creating a new one.
     if (channelRef.current && channelEmployeeIdRef.current !== employeeId) {
       try {
-        await channelRef.current.unsubscribe();
+        await supabaseClient.removeChannel(channelRef.current);
       } catch (err) {
-        console.warn('[live-monitor] error unsubscribing previous channel before reuse', err);
+        console.warn('[live-monitor] error removing previous channel before reuse', err);
       }
       channelRef.current = null;
       channelReadyRef.current = null;
@@ -499,19 +528,44 @@ export default function LiveMonitorPage() {
       // Tear down any previous channel (different employee, or a stale one).
       if (channelRef.current) {
         try {
-          await channelRef.current.unsubscribe();
+          await supabaseClient.removeChannel(channelRef.current);
         } catch (err) {
-          console.warn('[live-monitor] error unsubscribing previous channel', err);
+          console.warn('[live-monitor] error removing previous channel', err);
         }
         channelRef.current = null;
         channelReadyRef.current = null;
         channelEmployeeIdRef.current = null;
       }
 
+      // ───────────────────────────────────────────────────────────────────
+      // FIX: orphaned-channel guard. Fast Refresh (or any remount that
+      // reset our refs without calling removeChannel — e.g. this component
+      // getting torn down and rebuilt by React without our unmount effect
+      // running for some reason) can leave the *actual* Supabase channel
+      // object still registered under this topic even though our refs
+      // think it's gone. supabaseClient.channel(topic, ...) will then
+      // silently hand back that orphaned, already-subscribed object instead
+      // of a fresh one — and its listeners are wired to dead closures from
+      // the previous mount, so offers/answers/ICE candidates go nowhere.
+      // Find and remove any such orphan by topic before creating anew.
+      // ───────────────────────────────────────────────────────────────────
+      const topic = `live-${employeeId}`;
+      const orphan = supabaseClient.getChannels().find((ch: any) =>
+        ch.topic === `realtime:${topic}` || ch.topic === topic
+      );
+      if (orphan) {
+        console.warn('[live-monitor] removing orphaned channel before recreating', topic);
+        try {
+          await supabaseClient.removeChannel(orphan);
+        } catch (err) {
+          console.warn('[live-monitor] error removing orphaned channel', err);
+        }
+      }
+
       // NOTE: `private: true` and `broadcast.ack: true` MUST match the
       // Electron agent's channel config exactly, or the two sides will not
       // see each other's broadcasts despite sharing a topic name.
-      const channel = supabaseClient.channel(`live-${employeeId}`, {
+      const channel = supabaseClient.channel(topic, {
         config: {
           broadcast: { self: false, ack: true },
           presence: { key: adminIdRef.current || 'admin' },
@@ -588,6 +642,9 @@ export default function LiveMonitorPage() {
           clearConnectTimeout();
           clearReconnectTimer();
           connectAttemptsRef.current = 0;
+          if (peerRef.current?.remoteDescription) {
+            markStreamActive();
+          }
         } catch (err: any) {
           console.error('[live-monitor] failed to apply remote answer', err);
           setStreamError(err?.message || 'Failed to apply remote answer');
@@ -742,28 +799,32 @@ export default function LiveMonitorPage() {
 
     clearConnectTimeout();
     connectTimeoutRef.current = setTimeout(() => {
-      if (activeEmployeeRef.current === employeeId && !isStreaming) {
-        if (agentOnlineRef.current.get(employeeId) === false) {
-          console.log('[live-monitor] not retrying — agent known to be offline', { employeeId });
-          handleAgentWentOffline(employeeId);
-          return;
-        }
-        if (connectAttemptsRef.current < 1) {
-          connectAttemptsRef.current += 1;
-          console.log('[live-monitor] retrying stream-request automatically', { employeeId });
-          void channel.send({
-            type: 'broadcast',
-            event: 'offer',
-            payload: { employeeId, adminId: adminIdRef.current, from: 'admin', sdp: serializeSessionDescription(pc.localDescription) },
-          }).then((result: string) => {
-            console.log('[live-monitor] retry send offer result:', result);
-          });
-          return;
-        }
-        setStreamError('No response from agent. It may be offline or unreachable.');
-        setStreamState('Timed out');
-        setIsConnectingStream(false);
+      if (activeEmployeeRef.current !== employeeId) return;
+      if (hasStreamConnected() || isStreamingRef.current) {
+        console.log('[live-monitor] stopping retry loop — stream already connected', { employeeId });
+        clearConnectTimeout();
+        return;
       }
+      if (agentOnlineRef.current.get(employeeId) === false) {
+        console.log('[live-monitor] not retrying — agent known to be offline', { employeeId });
+        handleAgentWentOffline(employeeId);
+        return;
+      }
+      if (connectAttemptsRef.current < 1) {
+        connectAttemptsRef.current += 1;
+        console.log('[live-monitor] retrying stream-request automatically', { employeeId });
+        void channel.send({
+          type: 'broadcast',
+          event: 'offer',
+          payload: { employeeId, adminId: adminIdRef.current, from: 'admin', sdp: serializeSessionDescription(pc.localDescription) },
+        }).then((result: string) => {
+          console.log('[live-monitor] retry send offer result:', result);
+        });
+        return;
+      }
+      setStreamError('No response from agent. It may be offline or unreachable.');
+      setStreamState('Timed out');
+      setIsConnectingStream(false);
     }, STREAM_CONNECT_TIMEOUT_MS);
   }
 
