@@ -2,7 +2,7 @@
 import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
-import { supabaseAdmin } from '@/lib/supabase';
+import { assertSupabaseAdmin } from '@/lib/supabase';
 import { emitSocketEvent } from '@/lib/socket';
 
 export async function POST(req: NextRequest) {
@@ -11,6 +11,8 @@ export async function POST(req: NextRequest) {
   if ('status' in user) return user;
 
   try {
+    const supabaseAdmin = assertSupabaseAdmin();
+
     const formData   = await req.formData();
     const file       = formData.get('screenshot') as File | null;
     const sessionId  = formData.get('sessionId') as string | null;
@@ -150,6 +152,7 @@ export async function DELETE(req: NextRequest) {
       const m = fileUrl.match(/screenshots\/(.*)$/);
       if (m && m[1]) {
         const objectPath = `screenshots/${m[1]}`;
+        const supabaseAdmin = assertSupabaseAdmin();
         const { error: removeErr } = await supabaseAdmin.storage.from('screenshots').remove([objectPath]);
         if (removeErr) console.warn('Failed to remove screenshot from storage', removeErr);
       }
