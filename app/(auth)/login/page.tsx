@@ -1,6 +1,6 @@
 'use client';
 // app/(auth)/login/page.tsx
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth';
 import Image from "next/image";
@@ -10,8 +10,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error,    setError]    = useState('');
   const [loading,  setLoading]  = useState(false);
-  const { setAuth } = useAuthStore();
+  const { setAuth, user, hasHydrated } = useAuthStore();
   const router = useRouter();
+
+  useEffect(() => {
+    if (hasHydrated && user) {
+      router.replace('/dashboard');
+    }
+  }, [hasHydrated, router, user]);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setError('');
@@ -20,7 +26,7 @@ export default function LoginPage() {
       const data = await res.json();
       if (!res.ok) { setError(data.error || 'Login failed'); return; }
       setAuth(data.token, data.user);
-      router.push('/dashboard');
+      router.replace('/dashboard');
     } catch { setError('Network error — is the server running?'); }
     finally  { setLoading(false); }
   }

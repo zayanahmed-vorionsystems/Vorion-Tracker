@@ -8,9 +8,10 @@ export type Role = 'super_admin'|'admin'|'qa_manager'|'team_lead'|'employee';
 export interface AuthUser { id:string; name:string; email:string; role:Role; teamId:string|null; }
 
 interface AuthState {
-  token: string|null; user: AuthUser|null;
+  token: string|null; user: AuthUser|null; hasHydrated: boolean;
   setAuth: (token:string, user:AuthUser) => void;
   logout: () => void;
+  setHydrated: (hydrated: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -18,6 +19,7 @@ export const useAuthStore = create<AuthState>()(
     (set) => ({
       token: null,
       user: null,
+      hasHydrated: false,
       setAuth: (token, user) => {
         // Normalize role casing to avoid case-sensitive mismatches from DB
         const normalizedRole = (user?.role && String(user.role).toLowerCase()) as any;
@@ -25,8 +27,15 @@ export const useAuthStore = create<AuthState>()(
         set({ token, user: normalizedUser });
       },
       logout: () => set({ token: null, user: null }),
+      setHydrated: (hasHydrated) => set({ hasHydrated }),
     }),
-    { name: 'worktrack-auth' }
+    {
+      name: 'worktrack-auth',
+      partialize: (state) => ({ token: state.token, user: state.user }),
+      onRehydrateStorage: () => (state) => {
+        state?.setHydrated(true);
+      },
+    }
   )
 );
 

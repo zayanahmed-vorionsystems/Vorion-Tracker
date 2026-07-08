@@ -566,20 +566,26 @@ async function captureAndUpload() {
 // ─── Session management ─────────────────────────────────────────────────────
 async function startTracking() {
   if (tracking) return;
+
   tracking = true;
-  await initializeSocket();
-  await startSession();
+  status = 'active';
+
+  void initializeSocket();
+  void startSession();
+
   ssInterval        = setInterval(captureAndUpload, captureIntervalSec * 1000);
   idleInterval      = setInterval(watchIdle, 2000);
   heartbeatInterval = setInterval(() => sendHeartbeat(), 30000);
   policyInterval    = setInterval(() => { void enforcePolicies(); }, 5000);
   scanInterval      = setInterval(() => { void scanBlockedApps(); void scanBlockedWebsites(); }, 2000);
   policySyncInterval = setInterval(() => { void syncPolicies(); }, 30000);
-  captureAndUpload();
-  await sendHeartbeat();
-  await syncPolicies();
-  await scanBlockedApps();
-  await scanBlockedWebsites();
+
+  void captureAndUpload();
+  void sendHeartbeat();
+  void syncPolicies();
+  void scanBlockedApps();
+  void scanBlockedWebsites();
+
   updateTray();
   mainWindow?.webContents.send('tracking-status',{ tracking:true, sessionId });
   broadcastStatus();
@@ -589,8 +595,9 @@ async function stopTracking() {
   if (!tracking) return;
 
   tracking = false;
+  status = 'offline';
 
-  await endSession();
+  void endSession();
 
   if (ssInterval) clearInterval(ssInterval);
   if (idleInterval) clearInterval(idleInterval);
@@ -600,10 +607,7 @@ async function stopTracking() {
   if (policySyncInterval) clearInterval(policySyncInterval);
 
   teardownLiveWatch();
-
   closeAllStreams();
-
-  status = 'offline';
 
   updateTray();
 
@@ -764,18 +768,12 @@ app.whenReady().then(async ()=>{
   mainWindow?.show();
   if (token) {
     try {
-      const authRes = await apiRequest('GET', '/api/auth');
-      const nextEmployeeId = getEmployeeIdFromUser(authRes?.user || authRes?.profile || null);
-      const nextUserName = authRes?.user?.name || authRes?.user?.full_name || authRes?.user?.fullName || '';
+      const nextEmployeeId = getEmployeeIdFromUser(get('user') || null);
+      const nextUserName = get('userName') || '';
       persistSessionIdentity(token, nextUserName, nextEmployeeId);
-      console.log('[AUTH] restored session identity', { employeeId, userName, hasToken: Boolean(token) });
+      console.log('[AUTH] restored session identity from local store', { employeeId, userName, hasToken: Boolean(token) });
       status = 'offline';
       mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
-      // FIX: employeeId may not have been available yet if startTracking()
-      // already ran (e.g. auto-start) and called initializeSocket() while
-      // employeeId was still ''. Call it again now that identity restore
-      // has completed — initializeSocket() is a safe no-op if the live-watch
-      // channel was already set up, and will proceed if it wasn't.
       void initializeSocket();
     } catch {
       console.log('Stored token invalid/expired — clearing, user must log in again');
@@ -784,6 +782,20 @@ app.whenReady().then(async ()=>{
       status = 'offline';
       mainWindow?.webContents.send('status-changed', { status:'offline' });
     }
+
+    void (async () => {
+      try {
+        const authRes = await apiRequest('GET', '/api/auth');
+        const nextEmployeeId = getEmployeeIdFromUser(authRes?.user || authRes?.profile || null);
+        const nextUserName = authRes?.user?.name || authRes?.user?.full_name || authRes?.user?.fullName || '';
+        persistSessionIdentity(token, nextUserName, nextEmployeeId);
+        console.log('[AUTH] refreshed session identity', { employeeId, userName, hasToken: Boolean(token) });
+        mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
+        void initializeSocket();
+      } catch {
+        console.log('[AUTH] background auth refresh failed — keeping cached identity');
+      }
+    })();
   }
 });
 

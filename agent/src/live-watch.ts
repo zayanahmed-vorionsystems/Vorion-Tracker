@@ -8,6 +8,8 @@ let captureWindow: BrowserWindow | null = null;
 let listenersBound = false;
 let windowReadyPromise: Promise<void> | null = null;
 let captureWindowReady = false;
+let captureRendererReadyPromise: Promise<void> | null = null;
+let resolveCaptureRendererReady: (() => void) | null = null;
 let liveChannel: RealtimeChannel | null = null;
 let liveChannelEmployeeId: string | null = null;
 let activeAdminIds = new Set<string>();
@@ -90,6 +92,9 @@ function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> 
 
   captureWindow = win;
   captureWindowReady = false;
+  captureRendererReadyPromise = new Promise<void>((resolve) => {
+    resolveCaptureRendererReady = resolve;
+  });
 
   win.once('ready-to-show', () => {
     console.log('[live-watch] capture window ready-to-show');
@@ -112,13 +117,19 @@ function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> 
     if (captureWindow === win) {
       captureWindow = null;
       windowReadyPromise = null;
+      captureRendererReadyPromise = null;
+      resolveCaptureRendererReady = null;
       captureWindowReady = false;
     }
   });
 
   const ready = new Promise<void>((resolve) => {
     win.webContents.once('did-finish-load', () => {
+      console.log('[AGENT] capture window finished loading, allowing stream handoff');
       captureWindowReady = true;
+      resolveCaptureRendererReady?.();
+      resolveCaptureRendererReady = null;
+      void flushPendingCaptureRequests();
       resolve();
     });
   });
@@ -140,7 +151,32 @@ function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> 
   return { win, ready };
 }
 
+async function waitForCaptureRendererReady(timeoutMs = 8000) {
+  if (captureWindowReady) {
+    return;
+  }
+
+  if (!captureRendererReadyPromise) {
+    captureWindowReady = true;
+    return;
+  }
+
+  try {
+    await Promise.race([
+      captureRendererReadyPromise,
+      new Promise<void>((_, reject) => {
+        setTimeout(() => reject(new Error('Capture renderer failed to become ready in time')), timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    console.warn('[AGENT] capture renderer did not signal ready, continuing with best-effort start', error);
+    captureWindowReady = true;
+  }
+}
+
 async function sendStartCapture(win: BrowserWindow, adminId: string, offer?: any, requestId?: string) {
+  await waitForCaptureRendererReady();
+
   const sources = await desktopCapturer.getSources({
     types: ['screen'],
     thumbnailSize: { width: 1280, height: 720 },
@@ -172,15 +208,6 @@ async function sendStartCapture(win: BrowserWindow, adminId: string, offer?: any
   }
 
   if (win.isDestroyed()) return;
-
-  const start = Date.now();
-  while (!captureWindowReady) {
-    if (Date.now() - start > 10000) {
-      console.error('[MAIN] capture window did not report ready before start-capture');
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
 
   console.log('[AGENT] sending start-capture to hidden capture window', { adminId, requestId, sourceId: chosen.id, hasOffer: Boolean(offer) });
   win.webContents.send('start-capture', { sourceId: chosen.id, adminId, offer, requestId });
@@ -324,7 +351,10 @@ export function setupLiveWatch(employeeId: string) {
     listenersBound = true;
 
     ipcMain.on('live-watch:ready', () => {
+      console.log('[AGENT] capture renderer signaled ready');
       captureWindowReady = true;
+      resolveCaptureRendererReady?.();
+      resolveCaptureRendererReady = null;
       void flushPendingCaptureRequests();
     });
 

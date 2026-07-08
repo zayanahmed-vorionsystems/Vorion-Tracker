@@ -35,12 +35,17 @@ const NavItem = ({ href, label, show = true }: { href: string; label: string; sh
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { user, logout } = useAuthStore();
+  const { user, logout, hasHydrated } = useAuthStore();
   const router = useRouter();
   const role = user?.role as Role;
 
-  useEffect(() => { if (!user) router.push('/login'); }, [user]);
-  if (!user) return null;
+  useEffect(() => {
+    if (hasHydrated && !user) {
+      router.replace('/login');
+    }
+  }, [hasHydrated, router, user]);
+
+  if (!hasHydrated || !user) return null;
 
   return (
     <div style={{
@@ -110,14 +115,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <NavItem href="/reports"     label="Reports" />
           <NavItem href="/security"    label="Security Policies" show={canManageUsers(role)} />
           <NavItem href="/users"       label="User Management" show={canManageUsers(role)} />
-          <NavItem href="/download"    label="Download Agent" />
+          <NavItem href="/download"    label="Download Agent" show={role === 'super_admin'} />
         </nav>
 
         {/* User footer */}
         <div style={{ borderTop: '1px solid rgba(248,250,252,.08)', paddingTop: 12 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>{user.name}</div>
           <div style={{ fontSize: 11, color: 'rgba(248,250,252,.35)', marginBottom: 10 }}>{user.email}</div>
-          <button onClick={() => { logout(); router.push('/login'); }} style={{
+          <button onClick={() => { logout(); router.replace('/login'); }} style={{
             fontSize: 12, color: '#FF5C7A', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 500,
           }}>
             Sign out
