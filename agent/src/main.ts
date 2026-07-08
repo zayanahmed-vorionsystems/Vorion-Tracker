@@ -784,16 +784,39 @@ app.whenReady().then(async ()=>{
   tray = new Tray(process.platform==='darwin' ? icon.resize({width:18,height:18}) : icon);
   tray.on('double-click',()=>mainWindow?.show());
   updateTray();
-  mainWindow?.show();
-  token = '';
-  userName = '';
-  employeeId = '';
-  set('token', '');
-  set('userName', '');
-  set('employeeId', '');
-  status = 'offline';
-  liveWatchStarted = false;
-  mainWindow?.webContents.send('status-changed', { status: 'offline' });
+  const storedToken = get('token') || '';   // pehle read karo
+if (storedToken) {
+    try {
+        const nextEmployeeId = getEmployeeIdFromUser(get('user') || null);
+        const nextUserName = get('userName') || '';
+        persistSessionIdentity(storedToken, nextUserName, nextEmployeeId);
+        console.log('[AUTH] restored session identity from local store', { employeeId, userName, hasToken: Boolean(token) });
+        status = 'offline';
+        mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
+        void initializeSocket();
+    } catch {
+        token = '';
+        userName = '';
+        employeeId = '';
+        set('token', '');
+        set('userName', '');
+        set('employeeId', '');
+        status = 'offline';
+        mainWindow?.webContents.send('status-changed', { status: 'offline' });
+    }
+
+    void (async () => {
+        try {
+            const authRes = await apiRequest('GET', '/api/auth');
+            // ...rest same
+        } catch {
+            console.log('[AUTH] background auth refresh failed — keeping cached identity');
+        }
+    })();
+} else {
+    status = 'offline';
+    mainWindow?.webContents.send('status-changed', { status: 'offline' });
+}
   if (token) {
     try {
       const nextEmployeeId = getEmployeeIdFromUser(get('user') || null);
