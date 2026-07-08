@@ -3,63 +3,77 @@ import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/auth';
 import { useRouter } from "next/navigation";
 
+// ---- Vorion Brand Palette (kept consistent with dashboard/sidebar) ----
+const BRAND = {
+  black: '#0A0E1A',
+  blackSoft: '#10182B',
+  white: '#F5F7FA',
+  blue: '#1E5AE0',
+  blueSoft: 'rgba(30,90,224,.16)',
+  yellow: '#F5C400',
+  yellowSoft: 'rgba(245,196,0,.12)',
+  border: 'rgba(245,247,250,.08)',
+  muted: 'rgba(245,247,250,.5)',
+  mutedFaint: 'rgba(245,247,250,.3)',
+  danger: '#FF5C7A',
+};
 
 const ROLES = ['super_admin','admin','executive','qa_manager','team_lead','employee'];
 const ROLE_COLOR: Record<string,string> = {
-  super_admin:'#7c3aed',admin:'#818CF8',executive:'#0369a1',qa_manager:'#0f766e',team_lead:'#b45309',employee:'#374151'
+  super_admin:'#B45CFF',admin:BRAND.blue,executive:'#26C6DA',qa_manager:'#2DD4BF',team_lead:BRAND.yellow,employee:BRAND.mutedFaint
 };
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: '100vh',
     background: `
-linear-gradient(180deg,#020617,#0F172A),
-radial-gradient(circle at top left,#2563EB30 0%,transparent 35%),
-radial-gradient(circle at bottom right,#9333EA20 0%,transparent 40%)
+linear-gradient(180deg,${BRAND.black},${BRAND.blackSoft}),
+radial-gradient(circle at top left,${BRAND.blueSoft} 0%,transparent 35%),
+radial-gradient(circle at bottom right,${BRAND.yellowSoft} 0%,transparent 40%)
 `,
-    color: '#F8FAFC',
+    color: BRAND.white,
     fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif',
     padding: '28px 32px',
   },
-  heading: { fontSize: 22, fontWeight: 600, marginBottom: 4, color: '#F8FAFC' },
-  subtext: { fontSize: 13, color: 'rgba(248,250,252,.55)', marginTop: 4 },
+  heading: { fontSize: 22, fontWeight: 600, marginBottom: 4, color: BRAND.white },
+  subtext: { fontSize: 13, color: BRAND.muted, marginTop: 4 },
   button:{
 padding:'10px 18px',
 borderRadius:14,
-background:'linear-gradient(90deg,#2563EB,#3B82F6)',
+background:`linear-gradient(90deg,${BRAND.blue},#4C8CFF)`,
 color:'#fff',
 fontWeight:600,
 border:'none',
 cursor:'pointer',
 transition:'all .25s ease',
-boxShadow:'0 10px 25px rgba(37,99,235,.35)',
+boxShadow:`0 10px 25px ${BRAND.blueSoft}`,
 },
   card:{
-background:'rgba(20,25,40,.72)',
+background:'rgba(16,24,43,.75)',
 backdropFilter:'blur(20px)',
 WebkitBackdropFilter:'blur(20px)',
-border:'1px solid rgba(255,255,255,.08)',
+border:`1px solid ${BRAND.border}`,
 borderRadius:22,
 padding:'28px',
-boxShadow:'0 20px 50px rgba(0,0,0,.35)',
+boxShadow:'0 20px 50px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05)',
 },
-  cardHeader: { fontSize: 14, fontWeight: 600, marginBottom: 16, color: '#F8FAFC' },
+  cardHeader: { fontSize: 14, fontWeight: 600, marginBottom: 16, color: BRAND.white },
   input:{
 width:'100%',
 padding:'12px 14px',
 borderRadius:14,
-border:'1px solid rgba(255,255,255,.08)',
-background:'rgba(255,255,255,.05)',
+border:`1px solid ${BRAND.border}`,
+background:'rgba(245,247,250,.05)',
 backdropFilter:'blur(10px)',
 fontSize:14,
-color:'#F8FAFC',
+color:BRAND.white,
 outline:'none',
 transition:'all .2s ease',
 },
  tableCard:{
-background:'rgba(20,25,40,.72)',
+background:'rgba(16,24,43,.78)',
 backdropFilter:'blur(20px)',
-border:'1px solid rgba(255,255,255,.08)',
+border:`1px solid ${BRAND.border}`,
 borderRadius:22,
 overflow:'hidden',
 boxShadow:'0 20px 50px rgba(0,0,0,.35)',
@@ -68,15 +82,15 @@ boxShadow:'0 20px 50px rgba(0,0,0,.35)',
     padding: '10px 16px',
     textAlign: 'left',
     fontWeight: 600,
-    color: 'rgba(248,250,252,.45)',
+    color: BRAND.mutedFaint,
     fontSize: 11,
     textTransform: 'uppercase',
     letterSpacing: '0.06em',
-    borderBottom: '1px solid rgba(248,250,252,.08)',
+    borderBottom: `1px solid ${BRAND.border}`,
   },
-  td: { padding:'10px 16px', color:'#F8FAFC', fontSize:13 },
-  tdMuted: { padding:'10px 16px', color:'rgba(248,250,252,.5)', fontSize:13 },
-  emptyState: { padding:40, textAlign:'center', color:'rgba(248,250,252,.3)', fontSize:13 },
+  td: { padding:'10px 16px', color:BRAND.white, fontSize:13 },
+  tdMuted: { padding:'10px 16px', color:BRAND.muted, fontSize:13 },
+  emptyState: { padding:40, textAlign:'center', color:BRAND.mutedFaint, fontSize:13 },
 };
 
 export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
@@ -171,19 +185,19 @@ return(
 
 <div
 style={{
-background:'rgba(20,25,40,.72)',
-border:'1px solid rgba(255,255,255,.08)',
+background:'rgba(16,24,43,.75)',
+border:`1px solid ${BRAND.border}`,
 borderRadius:20,
 padding:'20px',
 backdropFilter:'blur(20px)',
-boxShadow:'0 15px 35px rgba(0,0,0,.35)',
+boxShadow:'0 15px 40px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05)',
 }}
 >
 
 <div
 style={{
 fontSize:12,
-color:'#94A3B8',
+color:BRAND.muted,
 textTransform:'uppercase',
 }}
 >
@@ -195,7 +209,7 @@ style={{
 marginTop:10,
 fontSize:30,
 fontWeight:800,
-background:'linear-gradient(90deg,#3B82F6,#8B5CF6)',
+background:`linear-gradient(90deg,${BRAND.blue},${BRAND.yellow})`,
 WebkitBackgroundClip:'text',
 color:'transparent',
 }}
@@ -238,7 +252,7 @@ style={{
 fontSize:34,
 fontWeight:800,
 margin:0,
-color:"#F8FAFC",
+color:BRAND.white,
 }}
 >
 👥 User Management
@@ -246,7 +260,7 @@ color:"#F8FAFC",
           <p
 style={{
 fontSize:14,
-color:"#94A3B8",
+color:BRAND.muted,
 marginTop:6,
 }}
 >
@@ -306,7 +320,7 @@ value={users.filter(u=>u.role==='admin').length}
                 <label style={{ fontSize:11,
 fontWeight:700,
 letterSpacing:'.08em',
-color:'rgba(255,255,255,.55)',
+color:BRAND.muted,
 textTransform:"uppercase",display:'block',marginBottom:4 }}>Full name</label>
                 <input style={styles.input} required value={form.name} onChange={e=>F('name',e.target.value)}/>
               </div>
@@ -314,7 +328,7 @@ textTransform:"uppercase",display:'block',marginBottom:4 }}>Full name</label>
                 <label style={{ fontSize:11,
 fontWeight:700,
 letterSpacing:'.08em',
-color:'rgba(255,255,255,.55)',
+color:BRAND.muted,
 textTransform:"uppercase",display:'block',marginBottom:4 }}>Email</label>
                 <input style={styles.input} type="email" required value={form.email} onChange={e=>F('email',e.target.value)}/>
               </div>
@@ -322,7 +336,7 @@ textTransform:"uppercase",display:'block',marginBottom:4 }}>Email</label>
                 <label style={{ fontSize:11,
 fontWeight:700,
 letterSpacing:'.08em',
-color:'rgba(255,255,255,.55)',
+color:BRAND.muted,
 textTransform:"uppercase",display:'block',marginBottom:4 }}>Role</label>
                 <select style={styles.input} value={form.role} onChange={e=>F('role',e.target.value)}>
                   {ROLES.map(r=><option key={r} value={r}>{r.replace(/_/g,' ')}</option>)}
@@ -335,7 +349,7 @@ textTransform:"uppercase",display:'block',marginBottom:4 }}>Role</label>
                 <label style={{ fontSize:11,
 fontWeight:700,
 letterSpacing:'.08em',
-color:'rgba(255,255,255,.55)',
+color:BRAND.muted,
 textTransform:"uppercase",display:'block',marginBottom:4 }}>
                   {editing ? 'New password (leave blank to keep)' : 'Password'}
                 </label>
@@ -353,7 +367,7 @@ textTransform:"uppercase",display:'block',marginBottom:4 }}>
                 <label style={{ fontSize:11,
 fontWeight:700,
 letterSpacing:'.08em',
-color:'rgba(255,255,255,.55)',
+color:BRAND.muted,
 textTransform:"uppercase",display:'block',marginBottom:4 }}>Confirm password</label>
                 <input
                   style={styles.input}
@@ -367,9 +381,9 @@ textTransform:"uppercase",display:'block',marginBottom:4 }}>Confirm password</la
             </div>
             {error&&<div style={{ padding:'12px',
 borderRadius:12,
-background:'rgba(220,38,38,.12)',
-border:'1px solid rgba(220,38,38,.25)',
-color:'#FCA5A5',
+background:'rgba(255,92,122,.12)',
+border:`1px solid ${BRAND.danger}40`,
+color:BRAND.danger,
 fontWeight:500,fontSize:11,
 letterSpacing:'.08em',
 marginBottom:10 }}>{error}</div>}
@@ -378,7 +392,7 @@ marginBottom:10 }}>{error}</div>}
                 {saving?'Saving…':editing?'Save changes':'Create user'}
               </button>
               <button type="button" onClick={()=>setShow(false)}
-                style={{ padding:'7px 16px',borderRadius:8,border:'1px solid rgba(248,250,252,.12)',fontSize:13,cursor:'pointer',background:'transparent',color:'#F8FAFC' }}>
+                style={{ padding:'7px 16px',borderRadius:8,border:`1px solid ${BRAND.border}`,fontSize:13,cursor:'pointer',background:'transparent',color:BRAND.white }}>
                 Cancel
               </button>
             </div>
@@ -405,7 +419,7 @@ style={{
 transition:'all .25s ease',
 }}
 onMouseEnter={(e)=>{
-e.currentTarget.style.background='rgba(255,255,255,.04)';
+e.currentTarget.style.background='rgba(245,247,250,.04)';
 }}
 onMouseLeave={(e)=>{
 e.currentTarget.style.background='transparent';
@@ -420,7 +434,7 @@ display:'inline-flex',
 alignItems:'center',
 padding:'6px 14px',
 borderRadius:999,
-background:'rgba(255,255,255,.05)',
+background:'rgba(245,247,250,.05)',
 border:`1px solid ${ROLE_COLOR[u.role]}30`,
 color:ROLE_COLOR[u.role],
 fontWeight:600,
@@ -436,7 +450,7 @@ fontSize:12,
                   <button onClick={()=>removeUser(u)} style={{ ...styles.button, padding:'6px 12px', fontSize:11,
 fontWeight:700,
 letterSpacing:'.08em',
-color:'rgba(255,255,255,.55)', background:'linear-gradient(90deg,#DC2626,#EF4444)', marginLeft:8 }}>
+color:'#fff', background:`linear-gradient(90deg,${BRAND.danger},#FF7A93)`, boxShadow:'0 10px 25px rgba(255,92,122,.25)', marginLeft:8 }}>
                     Delete
                   </button>
                 </td>

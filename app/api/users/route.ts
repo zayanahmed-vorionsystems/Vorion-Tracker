@@ -1,12 +1,13 @@
 // app/api/users/route.ts
 import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
-import { supabaseAdmin } from '@/lib/supabase';
+import { assertSupabaseAdmin } from '@/lib/supabase';
 import { requireAuth, requireRole, ok, err } from '@/lib/api';
 import { canManageUsers } from '@/lib/auth';
 import type { Role } from '@/lib/db';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
@@ -71,6 +72,14 @@ export async function POST(req: NextRequest) {
   const authUser = requireRole(req, 'super_admin', 'admin');
   if ('status' in authUser) return authUser;
 
+  let admin;
+  try {
+    admin = assertSupabaseAdmin();
+  } catch (e: any) {
+    console.error('[users:POST] Supabase admin unavailable:', e?.message || e);
+    return err(e?.message || 'Server misconfigured: Supabase admin unavailable', 500);
+  }
+
   const { name, email: rawEmail, role, departmentId, password } = await req.json();
   const email = String(rawEmail || '').trim().toLowerCase();
   if (!name || !email || !role || !password) {
@@ -82,7 +91,7 @@ export async function POST(req: NextRequest) {
 
   // 1. Create Supabase Auth user first
   const { data: authData, error: authError } =
-    await supabaseAdmin.auth.admin.createUser({
+    await admin.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
@@ -118,16 +127,24 @@ export async function POST(req: NextRequest) {
     `;
     return ok(u, 201);
   } catch (e: any) {
-  console.error('Create profile error:', e);
-  await supabaseAdmin.auth.admin.deleteUser(authData.user.id);
-  if (e.code === '23505') return err('Email already exists', 409);
-  return err(e?.message || 'Failed to create user profile', 500);  // throw ki jagah return
-}
+    console.error('Create profile error:', e);
+    await admin.auth.admin.deleteUser(authData.user.id);
+    if (e.code === '23505') return err('Email already exists', 409);
+    return err(e?.message || 'Failed to create user profile', 500);
+  }
 }
 
 export async function DELETE(req: NextRequest) {
   const authUser = requireRole(req, 'super_admin', 'admin');
   if ('status' in authUser) return authUser;
+
+  let admin;
+  try {
+    admin = assertSupabaseAdmin();
+  } catch (e: any) {
+    console.error('[users:DELETE] Supabase admin unavailable:', e?.message || e);
+    return err(e?.message || 'Server misconfigured: Supabase admin unavailable', 500);
+  }
 
   const { id } = await req.json();
   if (!id) return err('User id is required', 400);
@@ -150,7 +167,7 @@ export async function DELETE(req: NextRequest) {
     await sql`DELETE FROM public.profiles WHERE id = ${id}`;
 
     // 3. Delete from Supabase Auth last
-    const { error: deleteError } = await supabaseAdmin.auth.admin.deleteUser(id);
+    const { error: deleteError } = await admin.auth.admin.deleteUser(id);
     if (deleteError) {
       console.error('Supabase auth delete error:', deleteError);
       // Profile already deleted — just log, don't fail
@@ -167,6 +184,14 @@ export async function DELETE(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const authUser = requireAuth(req);
   if ('status' in authUser) return authUser;
+
+  let admin;
+  try {
+    admin = assertSupabaseAdmin();
+  } catch (e: any) {
+    console.error('[users:PATCH] Supabase admin unavailable:', e?.message || e);
+    return err(e?.message || 'Server misconfigured: Supabase admin unavailable', 500);
+  }
 
   const { id, name, email: rawEmail, role, departmentId, password } = await req.json();
   if (!id) return err('User id is required', 400);
@@ -196,7 +221,7 @@ export async function PATCH(req: NextRequest) {
   }
 
   if (Object.keys(authPayload).length > 0) {
-    const { error: authError } = await supabaseAdmin.auth.admin.updateUserById(id, authPayload as any);
+    const { error: authError } = await admin.auth.admin.updateUserById(id, authPayload as any);
     if (authError) {
       console.error('Supabase auth update error:', authError);
       if (authError.message?.includes('already registered')) return err('Email already exists in auth', 409);

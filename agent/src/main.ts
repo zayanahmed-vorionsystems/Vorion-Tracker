@@ -1,22 +1,35 @@
 // agent/src/main.ts  — Electron main process
+import * as dotenv from 'dotenv';
+import path from 'path';
+// Load agent .env as early as possible so service keys are available
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
+console.log('[AGENT] env load check', {
+  SUPABASE_URL: Boolean(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL),
+  SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+});
 import { app } from 'electron';
 import {
    BrowserWindow, Tray, Menu, nativeImage,
   ipcMain, powerMonitor, desktopCapturer, screen, shell, dialog
 } from 'electron';
-import { io } from 'socket.io-client';
-import path   from 'path';
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 import fs     from 'fs';
 import os     from 'os';
 import https  from 'https';
 import http   from 'http';
+// FIX: teardownLiveWatch must be imported from './live-watch' — the real
+// implementation there calls supabaseClient.removeChannel(liveChannel).
+// A local no-op function with the same name used to be declared further
+// down in this file, which shadowed this import and meant the real channel
+// was never torn down on stopTracking()/logout, leaving an orphaned,
+// still-subscribed channel behind every time.
 import { setupLiveWatch, teardownLiveWatch } from './live-watch';
 import type { IncomingMessage } from 'http';
 import { syncProxyBlock, removeProxyBlock } from './websiteBlock';
+
 // ─── Config ────────────────────────────────────────────────────────────────
 const isDev      = !app.isPackaged;
-const SERVER_URL = process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || (isDev ? 'http://127.0.0.1:3000' : 'https://vorion-tracker-rosy.vercel.app/');
-const SOCKET_SERVER_URL = process.env.SOCKET_SERVER_URL || (isDev ? 'http://127.0.0.1:4000' : 'https://vorion-tracker-rosy.vercel.app/');
+const SERVER_URL = process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || (isDev ? 'http://127.0.0.1:3000' : 'https://tracker.vorionsystems.com/');
 
 // ─── Persistent store ──────────────────────────────────────────────────────
 const DATA_DIR   = app.getPath('userData');
@@ -52,19 +65,7 @@ function persistSessionIdentity(nextToken?: string, nextUserName?: string, nextE
   }
 }
 
-function registerSocketWithServer(role: 'employee' = 'employee') {
-  console.log('Register payload', { employeeId, role, token });
-  if (!employeeId) {
-    console.warn('[AUTH] Register skipped because employeeId is empty', { tokenPresent: Boolean(token), storedEmployeeId: get('employeeId') || '' });
-    return;
-  }
-  socket.emit('register', { role, employeeId, token });
-}
-
 // ─── State ─────────────────────────────────────────────────────────────────
-const socket = io(SOCKET_SERVER_URL, { autoConnect:false, transports:['websocket','polling'] });
-socket.on('connect', () => console.log('AGENT SOCKET CONNECTED:', socket.id));
-socket.on('connect_error', (e) => console.log('AGENT SOCKET CONNECT ERROR:', e.message));
 let tray:        Tray|null          = null;
 let mainWindow:  BrowserWindow|null = null;
 let token:       string             = get('token') || '';
@@ -135,6 +136,9 @@ function apiRequest(method:string, path:string, body?:any, isFormData=false): Pr
           return reject(new HttpError(`Request failed ${status}: ${raw}`, status));
         }
       });
+    });
+    req.setTimeout(15000, () => {
+      req.destroy(new Error('Request timed out'));
     });
     req.on('error', reject);
     if (data) req.write(data);
@@ -497,106 +501,40 @@ function closeAllStreams() {
   streamWindow = null;
 }
 
-// Signaling data coming FROM the hidden stream window, forwarded OUT to the server
-ipcMain.on('stream:signal-out', (_e, data: { watcherId: string; type: 'offer' | 'ice'; sdp?: any; candidate?: any }) => {
-  if (data.type === 'offer') {
-    socket.emit('webrtc-offer', { watcherId: data.watcherId, sdp: data.sdp });
-  } else if (data.type === 'ice') {
-    socket.emit('webrtc-ice-candidate', { watcherId: data.watcherId, candidate: data.candidate });
-  }
-});
+// ─────────────────────────────────────────────────────────────────────────
+// FIX: previously `liveWatchStarted = true` was set unconditionally, before
+// checking whether `employeeId` was actually populated yet. Because
+// employeeId is restored asynchronously (via the GET /api/auth call in
+// app.whenReady()), it's very possible for startTracking() -> initializeSocket()
+// to run once with employeeId still '' — the `if (employeeId)` guard would
+// skip setupLiveWatch(), but the flag was already latched to `true`, so
+// every subsequent call became a permanent no-op. The live-watch channel
+// then never got created for the rest of that process's life, even after
+// employeeId became available moments later.
+//
+// Now we only latch `liveWatchStarted` once we've actually called
+// setupLiveWatch() with a real employeeId, so a call made too early can be
+// safely retried later (e.g. once boot-time identity restore finishes, or
+// the next time startTracking() runs).
+// ─────────────────────────────────────────────────────────────────────────
+let liveWatchStarted = false;
 
-// ─── Socket ─────────────────────────────────────────────────────────────────
-// ─── module-level guards (upar kahin, socket declaration ke aas-paas add karo) ──
-let socketInitialized = false;
-let liveWatchStarted  = false;
-
-// ─── Socket ─────────────────────────────────────────────────────────────────
 async function initializeSocket() {
-  if (socketInitialized) {
-    // Already wired up — sirf reconnect trigger karo agar disconnected ho
-    if (!socket.connected) socket.connect();
+  if (liveWatchStarted) return;
+  if (!employeeId) {
+    console.warn('[AGENT] initializeSocket called before employeeId was available — will retry once identity is known');
     return;
   }
-  socketInitialized = true;
-
-  socket.on('connect', () => {
-    console.log('Socket connected', socket.id);
-    if (employeeId) {
-      socket.emit('register', { role: 'employee', employeeId, token });
-      console.log('Registered with employeeId:', employeeId);
-    }
-
-    if (!liveWatchStarted) {
-      console.log('[AGENT] setupLiveWatch called from main.ts after socket connect', { employeeId });
-      setupLiveWatch(socket, employeeId);
-      liveWatchStarted = true;
-    } else {
-      console.log('[AGENT] socket reconnected — skipping setupLiveWatch (already running)');
-    }
-  });
-
-  socket.on('new-alert', async (alert: any) => {
-    console.log('🔔 Alert received from server:', alert);
-    await persistAlert(alert);
-    const { Notification } = await import('electron');
-    if (Notification.isSupported()) {
-      const notif = new Notification({
-        title: alert.title || 'WorkTrack Alert',
-        body: alert.description || alert.message || '',
-        urgency: 'critical'
-      } as any);
-      notif.show();
-    }
-    mainWindow?.webContents.send('new-alert', alert);
-  });
-
-  socket.on('disconnect', (reason) => {
-    console.log('Socket disconnected', reason);
-  });
-
-  // ── Live streaming signaling ──────────────────────────────────────────
-  socket.on('watch-request', ({ watcherId }: { watcherId: string }) => {
-    console.log('Watch request received from admin socket', watcherId);
-    handleWatchRequest(watcherId);
-  });
-
-  socket.on('webrtc-answer', ({ watcherId, sdp }: { watcherId: string; sdp: any }) => {
-  if (!sdp || !sdp.type || !sdp.sdp) {
-    console.error('[AGENT] Invalid SDP answer received', sdp);
-    return;
-  }
-  console.log('[AGENT] webrtc-answer received for watcher', watcherId);
-  streamWindow?.webContents.send('stream:signal-in', { watcherId, type: 'answer', sdp });
-});
-
-
-  socket.on('webrtc-ice-candidate', ({ watcherId, candidate }: { watcherId: string; candidate: any }) => {
-    
-    console.log('[AGENT] ice-candidate received for watcher', watcherId);
-    streamWindow?.webContents.send('stream:signal-in', { watcherId, type: 'ice', candidate });
-  });
-
-  socket.on('stop-watching', ({ watcherId }: { watcherId: string }) => {
-    console.log('[AGENT] stop-watching received for watcher', watcherId);
-    handleStopWatching(watcherId);
-  });
-
-  // ⚠️ IMPORTANT: agar ye line kahin aur (jaise live-watch.ts) se bhi nahi
-  // chal rahi, to yehi wo jagah hai jahan actual connect() call honi chahiye,
-  // kyunki socket autoConnect:false ke sath banaya gaya hai.
-  socket.connect();
+  liveWatchStarted = true;
+  console.log('[AGENT] setupLiveWatch called from main.ts', { employeeId });
+  setupLiveWatch(employeeId);
 }
+
 console.log('WorkTrack agent using SERVER_URL=', SERVER_URL);
-console.log('WorkTrack agent using SOCKET_SERVER_URL=', SOCKET_SERVER_URL);
 
 function broadcastStatus(extra: Record<string, any> = {}) {
   const payload = { agentId, employeeId, userName, status, sessionId, activeApp: lastActiveApp, activityPct: lastActivityPct, heartbeat: new Date().toISOString(), capturedAt: new Date().toISOString(), ...extra };
   mainWindow?.webContents.send('status-changed', payload);
-  if (socket.connected) {
-    socket.emit('employee-status', payload);
-    socket.emit('heartbeat', { agentId, status, heartbeat: payload.heartbeat });
-  }
 }
 
 async function sendHeartbeat() {
@@ -636,20 +574,26 @@ async function captureAndUpload() {
 // ─── Session management ─────────────────────────────────────────────────────
 async function startTracking() {
   if (tracking) return;
+
   tracking = true;
-  await initializeSocket();
-  await startSession();
+  status = 'active';
+
+  void initializeSocket();
+  void startSession();
+
   ssInterval        = setInterval(captureAndUpload, captureIntervalSec * 1000);
   idleInterval      = setInterval(watchIdle, 2000);
   heartbeatInterval = setInterval(() => sendHeartbeat(), 30000);
   policyInterval    = setInterval(() => { void enforcePolicies(); }, 5000);
   scanInterval      = setInterval(() => { void scanBlockedApps(); void scanBlockedWebsites(); }, 2000);
   policySyncInterval = setInterval(() => { void syncPolicies(); }, 30000);
-  captureAndUpload();
-  await sendHeartbeat();
-  await syncPolicies();
-  await scanBlockedApps();
-  await scanBlockedWebsites();
+
+  void captureAndUpload();
+  void sendHeartbeat();
+  void syncPolicies();
+  void scanBlockedApps();
+  void scanBlockedWebsites();
+
   updateTray();
   mainWindow?.webContents.send('tracking-status',{ tracking:true, sessionId });
   broadcastStatus();
@@ -659,8 +603,9 @@ async function stopTracking() {
   if (!tracking) return;
 
   tracking = false;
+  status = 'offline';
 
-  await endSession();
+  void endSession();
 
   if (ssInterval) clearInterval(ssInterval);
   if (idleInterval) clearInterval(idleInterval);
@@ -670,10 +615,7 @@ async function stopTracking() {
   if (policySyncInterval) clearInterval(policySyncInterval);
 
   teardownLiveWatch();
-
   closeAllStreams();
-
-  status = 'offline';
 
   updateTray();
 
@@ -712,7 +654,7 @@ function updateTray() {
 async function createWindow() {
   mainWindow = new BrowserWindow({
     width:560, height:760, resizable:true,
-    title:'WorkTrack Agent',
+    title:'Vorian Tracker Agent',
     webPreferences:{ preload:path.join(__dirname,'preload.js'), contextIsolation:true, nodeIntegration:false },
     show: true,
   });
@@ -767,9 +709,9 @@ ipcMain.handle('login', async (_e, email:string, password:string) => {
       console.warn('[AUTH] Login response did not contain an employeeId', { responseKeys: Object.keys(res || {}) });
     }
 
-    if (socket.connected) {
-      registerSocketWithServer('employee');
-      console.log('Re-registered socket with employeeId:', employeeId);
+    if (employeeId) {
+      setupLiveWatch(employeeId);
+      liveWatchStarted = true; // keep initializeSocket()'s latch in sync with this direct call
     }
     status = 'offline';
     mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
@@ -780,11 +722,14 @@ ipcMain.handle('login', async (_e, email:string, password:string) => {
   }
 });
 ipcMain.handle('logout', async () => {
-  if (token) {
-    try { await endSession(); await sessionAction('logout'); }
-    catch (err:any) { console.error('Logout action failed:', err?.message || err); }
-  }
   await stopTracking();
+
+  if (token) {
+    void sessionAction('logout').catch((err:any) => {
+      console.error('Logout action failed:', err?.message || err);
+    });
+  }
+
   token=''; userName=''; employeeId='';
   set('token',''); set('userName',''); set('employeeId','');
   status='offline';
@@ -818,7 +763,15 @@ ipcMain.handle('end-break', async () => {
   broadcastStatus();
   return { ok: true };
 });
-ipcMain.handle('checkout', async () => { await endSession(); await stopTracking(); });
+ipcMain.handle('checkout', async () => {
+  if (tracking) {
+    await stopTracking();
+    return { ok: true };
+  }
+
+  void endSession();
+  return { ok: true };
+});
 app.commandLine.appendSwitch('disable-features', 'DesktopCaptureUseDxgi');
 // ─── Boot ────────────────────────────────────────────────────────────────────
 app.whenReady().then(async ()=>{
@@ -832,15 +785,24 @@ app.whenReady().then(async ()=>{
   tray.on('double-click',()=>mainWindow?.show());
   updateTray();
   mainWindow?.show();
+  token = '';
+  userName = '';
+  employeeId = '';
+  set('token', '');
+  set('userName', '');
+  set('employeeId', '');
+  status = 'offline';
+  liveWatchStarted = false;
+  mainWindow?.webContents.send('status-changed', { status: 'offline' });
   if (token) {
     try {
-      const authRes = await apiRequest('GET', '/api/auth');
-      const nextEmployeeId = getEmployeeIdFromUser(authRes?.user || authRes?.profile || null);
-      const nextUserName = authRes?.user?.name || authRes?.user?.full_name || authRes?.user?.fullName || '';
+      const nextEmployeeId = getEmployeeIdFromUser(get('user') || null);
+      const nextUserName = get('userName') || '';
       persistSessionIdentity(token, nextUserName, nextEmployeeId);
-      console.log('[AUTH] restored session identity', { employeeId, userName, hasToken: Boolean(token) });
+      console.log('[AUTH] restored session identity from local store', { employeeId, userName, hasToken: Boolean(token) });
       status = 'offline';
       mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
+      void initializeSocket();
     } catch {
       console.log('Stored token invalid/expired — clearing, user must log in again');
       token=''; userName=''; employeeId='';
@@ -848,6 +810,20 @@ app.whenReady().then(async ()=>{
       status = 'offline';
       mainWindow?.webContents.send('status-changed', { status:'offline' });
     }
+
+    void (async () => {
+      try {
+        const authRes = await apiRequest('GET', '/api/auth');
+        const nextEmployeeId = getEmployeeIdFromUser(authRes?.user || authRes?.profile || null);
+        const nextUserName = authRes?.user?.name || authRes?.user?.full_name || authRes?.user?.fullName || '';
+        persistSessionIdentity(token, nextUserName, nextEmployeeId);
+        console.log('[AUTH] refreshed session identity', { employeeId, userName, hasToken: Boolean(token) });
+        mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
+        void initializeSocket();
+      } catch {
+        console.log('[AUTH] background auth refresh failed — keeping cached identity');
+      }
+    })();
   }
 });
 

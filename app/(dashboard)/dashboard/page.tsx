@@ -1,8 +1,8 @@
 'use client';
 // app/(dashboard)/dashboard/page.tsx
 import { useEffect, useState, useCallback } from 'react';
-import { io } from 'socket.io-client';
 import { useAuthStore } from '@/store/auth';
+import { supabaseClient } from '@/lib/supabase';
 import { fmtCompact, fmtPrecise, timeAgo } from './timeUtils';
 
 function fmt(secs: number) {
@@ -10,19 +10,30 @@ function fmt(secs: number) {
   return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
 }
 
-const SOCKET_SERVER_URL = (typeof window !== 'undefined' && window.location?.origin)
-  ? `${window.location.protocol}//${window.location.hostname}:4000`
-  : 'http://127.0.0.1:4000';
+// ---- Vorion Brand Palette (kept consistent with sidebar layout) ----
+const BRAND = {
+  black: '#0A0E1A',
+  blackSoft: '#10182B',
+  white: '#F5F7FA',
+  blue: '#1E5AE0',
+  blueSoft: 'rgba(30,90,224,.16)',
+  yellow: '#F5C400',
+  yellowSoft: 'rgba(245,196,0,.12)',
+  border: 'rgba(245,247,250,.08)',
+  muted: 'rgba(245,247,250,.5)',
+  mutedFaint: 'rgba(245,247,250,.3)',
+  danger: '#FF5C7A',
+};
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: '100vh',
     background: `
-linear-gradient(180deg,#020617,#0F172A),
-radial-gradient(circle at top left,#2563EB30 0%,transparent 35%),
-radial-gradient(circle at bottom right,#9333EA20 0%,transparent 40%)
+linear-gradient(180deg,${BRAND.black},${BRAND.blackSoft}),
+radial-gradient(circle at top left,${BRAND.blueSoft} 0%,transparent 35%),
+radial-gradient(circle at bottom right,${BRAND.yellowSoft} 0%,transparent 40%)
 `,
-    color: '#F8FAFC',
+    color: BRAND.white,
     fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif',
     padding: '28px 32px',
   },
@@ -36,19 +47,19 @@ radial-gradient(circle at bottom right,#9333EA20 0%,transparent 40%)
     fontSize: 22,
     fontWeight: 600,
     margin: 0,
-    color: '#F8FAFC',
+    color: BRAND.white,
   },
   subtext: {
     fontSize: 13,
-    color: 'rgba(248,250,252,.55)',
+    color: BRAND.muted,
     marginTop: 4,
   },
   dateInput: {
     padding: '8px 12px',
     borderRadius: 12,
-    border: '1px solid rgba(248,250,252,.12)',
-    background: 'rgba(248,250,252,.06)',
-    color: '#F8FAFC',
+    border: `1px solid ${BRAND.border}`,
+    background: 'rgba(245,247,250,.06)',
+    color: BRAND.white,
     fontSize: 13,
     outline: 'none',
     cursor: 'pointer',
@@ -60,20 +71,19 @@ radial-gradient(circle at bottom right,#9333EA20 0%,transparent 40%)
     marginBottom: 24,
   },
   statCard: {
-  background: 'rgba(20,25,40,.70)',
-  backdropFilter: 'blur(18px)',
-  WebkitBackdropFilter: 'blur(18px)',
-  border: '1px solid rgba(255,255,255,.08)',
-  borderRadius: 20,
-  padding: 22,
-  boxShadow:
-    '0 15px 40px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05)',
-  transition: 'all .25s ease',
-  cursor: 'pointer',
-},
+    background: 'rgba(16,24,43,.75)',
+    backdropFilter: 'blur(18px)',
+    WebkitBackdropFilter: 'blur(18px)',
+    border: `1px solid ${BRAND.border}`,
+    borderRadius: 20,
+    padding: 22,
+    boxShadow: '0 15px 40px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05)',
+    transition: 'all .25s ease',
+    cursor: 'pointer',
+  },
   statLabel: {
     fontSize: 11,
-    color: 'rgba(248,250,252,.5)',
+    color: BRAND.muted,
     marginBottom: 8,
     textTransform: 'uppercase' as const,
     letterSpacing: '0.06em',
@@ -85,23 +95,23 @@ radial-gradient(circle at bottom right,#9333EA20 0%,transparent 40%)
   },
   statSub: {
     fontSize: 11,
-    color: 'rgba(248,250,252,.35)',
+    color: BRAND.mutedFaint,
     marginTop: 6,
   },
   tableCard: {
-  background:'rgba(20,25,40,.72)',
-  backdropFilter:'blur(20px)',
-  border:'1px solid rgba(255,255,255,.08)',
-  borderRadius:22,
-  overflow:'hidden',
-  boxShadow:'0 20px 50px rgba(0,0,0,.35)',
-},
+    background: 'rgba(16,24,43,.78)',
+    backdropFilter: 'blur(20px)',
+    border: `1px solid ${BRAND.border}`,
+    borderRadius: 22,
+    overflow: 'hidden',
+    boxShadow: '0 20px 50px rgba(0,0,0,.35)',
+  },
   tableHeader: {
     padding: '14px 18px',
-    borderBottom: '1px solid rgba(248,250,252,.08)',
+    borderBottom: `1px solid ${BRAND.border}`,
     fontSize: 14,
     fontWeight: 600,
-    color: '#F8FAFC',
+    color: BRAND.white,
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -112,36 +122,36 @@ radial-gradient(circle at bottom right,#9333EA20 0%,transparent 40%)
     fontSize: 13,
   },
   thead: {
-    background: 'rgba(248,250,252,.04)',
+    background: 'rgba(245,247,250,.04)',
   },
   th: {
     padding: '10px 18px',
     textAlign: 'left' as const,
     fontWeight: 500,
-    color: 'rgba(248,250,252,.45)',
+    color: BRAND.mutedFaint,
     fontSize: 11,
     textTransform: 'uppercase' as const,
     letterSpacing: '0.06em',
-    borderBottom: '1px solid rgba(248,250,252,.08)',
+    borderBottom: `1px solid ${BRAND.border}`,
   },
   td: {
     padding: '12px 18px',
-    color: '#F8FAFC',
+    color: BRAND.white,
   },
   tdMuted: {
     padding: '12px 18px',
-    color: 'rgba(248,250,252,.4)',
+    color: BRAND.mutedFaint,
   },
   emptyState: {
     padding: 48,
     textAlign: 'center' as const,
-    color: 'rgba(248,250,252,.3)',
+    color: BRAND.mutedFaint,
     fontSize: 13,
   },
   loading: {
     padding: 48,
     textAlign: 'center' as const,
-    color: 'rgba(248,250,252,.3)',
+    color: BRAND.mutedFaint,
     fontSize: 13,
   },
 };
@@ -232,28 +242,29 @@ export default function DashboardPage() {
     return () => clearInterval(id);
   }, [fetchData]);
 
-  // ── Live status updates from the socket server ────────────────────────
+  // ── Live status updates from Supabase Realtime ───────────────────────
   useEffect(() => {
     if (!token || !user?.id) return;
 
-    const socket = io(SOCKET_SERVER_URL, {
-      transports: ['websocket', 'polling'],
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-    });
-
-    socket.on('connect', () => {
-      socket.emit('register', { role: user?.role || 'admin', employeeId: user?.id || null, token });
-    });
-
-    socket.on('employee-status', updateRowFromSocket);
+    const channel = supabaseClient
+      .channel(`dashboard-status-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'employee_status' }, (payload: any) => {
+        const record = payload?.new ?? payload?.record ?? payload;
+        const employeeId = record?.employee_id ?? record?.employeeId;
+        if (!employeeId) return;
+        updateRowFromSocket({
+          employeeId,
+          status: record?.current_status,
+          lastActivity: record?.last_activity,
+          currentApp: record?.current_app,
+        });
+      })
+      .subscribe();
 
     return () => {
-      try {
-        socket.disconnect();
-      } catch {}
+      channel.unsubscribe();
     };
-  }, [token, user?.id, user?.role, updateRowFromSocket]);
+  }, [token, user?.id, updateRowFromSocket]);
 
   // ── Derived stats ─────────────────────────────────────────────────────
   const active   = rows.filter(r => r.current_status === 'working' || r.current_status === 'on_break').length;
@@ -273,18 +284,19 @@ export default function DashboardPage() {
     offline:      'Offline',
   };
 
+  // Status colors kept within brand family: blue = active, yellow = break, white/muted = inactive
   const statusColors: Record<string, string> = {
-    working:     '#22C55E',
-    on_break:    '#F59E0B',
-    checked_out: '#60A5FA',
-    offline:     '#94A3B8',
+    working:     BRAND.blue,
+    on_break:    BRAND.yellow,
+    checked_out: BRAND.white,
+    offline:     BRAND.mutedFaint,
   };
 
   const statCards = [
-    { label: 'Active Today',  value: active,                                                               color: '#22C55E',  sub: `of ${rows.length} employees` },
-    { label: 'Total Hours',   value: precise ? fmtPrecise(totHrs) : fmtCompact(totHrs),                   color: '#3B82F6',  sub: 'logged today' },
-    { label: 'Screenshots',   value: totShots,                                                             color: '#A78BFA',  sub: 'taken today' },
-    { label: 'Avg Activity',  value: avgAct == null ? '--' : `${avgAct}%`,                                 color: avgAct == null ? '#94A3B8' : (avgAct < 40 ? '#F8D000' : '#22C55E'), sub: 'keyboard + mouse' },
+    { label: 'Active Today',  value: active,                                                             color: BRAND.blue,   sub: `of ${rows.length} employees` },
+    { label: 'Total Hours',   value: precise ? fmtPrecise(totHrs) : fmtCompact(totHrs),                 color: BRAND.yellow, sub: 'logged today' },
+    { label: 'Screenshots',   value: totShots,                                                           color: BRAND.white,  sub: 'taken today' },
+    { label: 'Avg Activity',  value: avgAct == null ? '--' : `${avgAct}%`,                               color: avgAct == null ? BRAND.mutedFaint : (avgAct < 40 ? BRAND.yellow : BRAND.blue), sub: 'keyboard + mouse' },
   ];
 
   return (
@@ -292,16 +304,10 @@ export default function DashboardPage() {
       {/* Top row */}
       <div style={styles.topRow}>
         <div>
-          <h1
-style={{
-fontSize:34,
-fontWeight:800,
-margin:0,
-}}
->
-Here's what's happening today., {user?.name}
-</h1>
-          <p style={styles.subtext}>Welcome back, {user?.name}</p>
+          <h1 style={{ fontSize: 30, fontWeight: 800, margin: 0, color: BRAND.white }}>
+            Here's what's happening today, <span style={{ color: BRAND.yellow }}>{user?.name}</span>
+          </h1>
+          <p style={styles.subtext}>Welcome back — here's your team overview</p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input
@@ -322,9 +328,9 @@ Here's what's happening today., {user?.name}
             style={{
               padding: '8px 10px',
               borderRadius: 10,
-              border: '1px solid rgba(248,250,252,.08)',
+              border: `1px solid ${BRAND.border}`,
               background: 'transparent',
-              color: '#F8FAFC',
+              color: BRAND.white,
               cursor: 'pointer',
               fontSize: 13,
             }}
@@ -338,9 +344,9 @@ Here's what's happening today., {user?.name}
             style={{
               padding: '8px 10px',
               borderRadius: 10,
-              border: '1px solid rgba(248,250,252,.08)',
+              border: `1px solid ${BRAND.border}`,
               background: 'transparent',
-              color: '#F8FAFC',
+              color: BRAND.white,
               cursor: 'pointer',
               fontSize: 13,
             }}
@@ -354,27 +360,23 @@ Here's what's happening today., {user?.name}
       <div style={styles.statsGrid}>
         {statCards.map(c => (
           <div
-    key={c.label}
-    style={styles.statCard}
-    onMouseEnter={(e)=>{
-        e.currentTarget.style.transform='translateY(-6px)';
-        e.currentTarget.style.boxShadow='0 25px 50px rgba(0,0,0,.45)';
-    }}
-    onMouseLeave={(e)=>{
-        e.currentTarget.style.transform='translateY(0)';
-        e.currentTarget.style.boxShadow='0 15px 40px rgba(0,0,0,.35)';
-    }}
->
+            key={c.label}
+            style={styles.statCard}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.transform = 'translateY(-6px)';
+              e.currentTarget.style.boxShadow = '0 25px 50px rgba(0,0,0,.45)';
+              e.currentTarget.style.borderColor = `${c.color}40`;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.transform = 'translateY(0)';
+              e.currentTarget.style.boxShadow = '0 15px 40px rgba(0,0,0,.35)';
+              e.currentTarget.style.borderColor = BRAND.border;
+            }}
+          >
             <div style={styles.statLabel}>{c.label}</div>
-            <div
-style={{
-    fontSize:34,
-    fontWeight:800,
-    background:`linear-gradient(90deg,${c.color},#A78BFA)`,
-    WebkitBackgroundClip:'text',
-    color:'transparent'
-}}
->{c.value}</div>
+            <div style={{ fontSize: 32, fontWeight: 800, color: c.color }}>
+              {c.value}
+            </div>
             <div style={styles.statSub}>{c.sub}</div>
           </div>
         ))}
@@ -385,7 +387,7 @@ style={{
         <div style={styles.tableHeader}>
           <span>Employee Summary — {date}</span>
           {lastSynced && (
-            <span style={{ fontSize: 11, color: 'rgba(248,250,252,.3)', fontWeight: 400 }}>
+            <span style={{ fontSize: 11, color: BRAND.mutedFaint, fontWeight: 400 }}>
               Last synced: {lastSynced.toLocaleTimeString()} · auto-refreshes every 60s
             </span>
           )}
@@ -408,11 +410,11 @@ style={{
                   key={r.id}
                   style={{
                     borderBottom: i < rows.length - 1
-                      ? '1px solid rgba(248,250,252,.06)'
+                      ? `1px solid ${BRAND.border}`
                       : 'none',
                     transition: 'background .15s',
                   }}
-                  onMouseEnter={e => (e.currentTarget.style.background='rgba(255,255,255,.05)')}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,.04)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 >
                   {/* Name */}
@@ -421,18 +423,18 @@ style={{
                   {/* Status */}
                   <td style={styles.td}>
                     <span
-style={{
-display:'inline-flex',
-alignItems:'center',
-gap:8,
-padding:'6px 14px',
-borderRadius:999,
-fontWeight:600,
-background:'rgba(255,255,255,.06)',
-border:`1px solid ${statusColors[r.current_status]}30`,
-color:statusColors[r.current_status],
-}}
->
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        padding: '6px 14px',
+                        borderRadius: 999,
+                        fontWeight: 600,
+                        background: 'rgba(255,255,255,.05)',
+                        border: `1px solid ${statusColors[r.current_status]}35`,
+                        color: statusColors[r.current_status],
+                      }}
+                    >
                       {statusLabels[r.current_status] || 'Offline'}
                     </span>
                   </td>
@@ -450,9 +452,9 @@ color:statusColors[r.current_status],
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <div style={{
                         flex: 1,
-                        height:8,
-                        borderRadius:999,
-                        background: 'rgba(248,250,252,.1)',
+                        height: 8,
+                        borderRadius: 999,
+                        background: 'rgba(245,247,250,.1)',
                         maxWidth: 80,
                         overflow: 'hidden',
                       }}>
@@ -460,15 +462,14 @@ color:statusColors[r.current_status],
                           height: '100%',
                           borderRadius: 2,
                           width: `${r.avg_activity_pct == null ? 0 : r.avg_activity_pct}%`,
-                          background:
-r.avg_activity_pct < 30
-? 'linear-gradient(90deg,#F59E0B,#FBBF24)'
-: 'linear-gradient(90deg,#22C55E,#06B6D4)'
+                          background: r.avg_activity_pct < 30
+                            ? BRAND.yellow
+                            : BRAND.blue,
                         }} />
                       </div>
                       <span
                         title={r.avg_activity_pct == null ? 'No activity data' : `${r.avg_activity_pct}%`}
-                        style={{ fontSize: 11, color: 'rgba(248,250,252,.5)', minWidth: 36 }}
+                        style={{ fontSize: 11, color: BRAND.muted, minWidth: 36 }}
                       >
                         {r.avg_activity_pct == null ? '—' : `${r.avg_activity_pct.toFixed(1)}%`}
                       </span>

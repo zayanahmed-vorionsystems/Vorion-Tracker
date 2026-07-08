@@ -69,6 +69,7 @@ style={{
           <div style={{ display:'flex', gap:14 }}>
             {LEGEND.map(l=>(
               <span
+key={l.label}
 style={{
 display:'flex',
 alignItems:'center',
@@ -158,7 +159,7 @@ color:'#F8FAFC', textAlign:'right',
               }}>
                 {r.name}
               </div>
-              <div style={{ height:32,
+              <div style={{ position:'relative', flex:1, height:32,
 background:'rgba(255,255,255,.06)',
 borderRadius:999,
 overflow:'hidden',

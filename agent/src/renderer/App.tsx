@@ -36,6 +36,7 @@ export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [alertsOpen, setAlertsOpen] = useState(false);
+
   const unreadCount = alerts.filter((alert) => !alert.isRead).length;
 
   const normalizeAlert = (raw: any): AlertRecord => ({
@@ -144,6 +145,7 @@ export default function App() {
       showNotification(alert);
     });
   }, []);
+
 
   return (
     <div style={{ fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif', minHeight:'100vh', background:'radial-gradient(circle at top, #1f2937 0%, #05070b 70%, #020304 100%)', padding:20, color:'#f8fafc' }}>

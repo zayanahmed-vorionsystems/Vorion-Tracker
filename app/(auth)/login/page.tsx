@@ -1,17 +1,36 @@
 'use client';
 // app/(auth)/login/page.tsx
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth';
 import Image from "next/image";
 import logo from '@/public/vorion-logo-light.png';
+
+const agentDownloadUrls = {
+  win: process.env.NEXT_PUBLIC_AGENT_WIN_URL,
+  mac: process.env.NEXT_PUBLIC_AGENT_MAC_URL,
+  linux: process.env.NEXT_PUBLIC_AGENT_LINUX_URL,
+};
+
+const downloadPlatforms = [
+  { id: 'win',   icon: '🪟', name: 'Windows', url: agentDownloadUrls.win },
+  { id: 'mac',   icon: '🍎', name: 'macOS',   url: agentDownloadUrls.mac },
+  { id: 'linux', icon: '🐧', name: 'Linux',   url: agentDownloadUrls.linux },
+];
+
 export default function LoginPage() {
-  const [email,    setEmail]    = useState('');
+  const [email,    setEmail]    = useState('admin@company.com');
   const [password, setPassword] = useState('');
   const [error,    setError]    = useState('');
   const [loading,  setLoading]  = useState(false);
-  const { setAuth } = useAuthStore();
+  const { setAuth, user, hasHydrated } = useAuthStore();
   const router = useRouter();
+
+  useEffect(() => {
+    if (hasHydrated && user) {
+      router.replace('/dashboard');
+    }
+  }, [hasHydrated, router, user]);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setError('');
@@ -20,7 +39,7 @@ export default function LoginPage() {
       const data = await res.json();
       if (!res.ok) { setError(data.error || 'Login failed'); return; }
       setAuth(data.token, data.user);
-      router.push('/dashboard');
+      router.replace('/dashboard');
     } catch { setError('Network error — is the server running?'); }
     finally  { setLoading(false); }
   }
@@ -33,6 +52,16 @@ export default function LoginPage() {
       color: '#F8FAFC',
     }}>
       {/* Overrides Chrome/Edge's default white autofill background on inputs */}
+      <style>{`
+        input:-webkit-autofill,
+        input:-webkit-autofill:hover,
+        input:-webkit-autofill:focus {
+          -webkit-text-fill-color: #F8FAFC !important;
+          -webkit-box-shadow: 0 0 0px 1000px rgba(20,26,40,1) inset !important;
+          box-shadow: 0 0 0px 1000px rgba(20,26,40,1) inset !important;
+          caret-color: #F8FAFC !important;
+        }
+      `}</style>
       <div style={{
         background: 'rgba(11,15,26,.82)', border: '1px solid rgba(248,250,252,.10)',
         backdropFilter: 'blur(16px)', borderRadius: 20,
@@ -42,20 +71,19 @@ export default function LoginPage() {
         {/* Brand */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
           <Image
-  src={logo}
-  alt="Vorion"
-  width={46}
-  height={46}
-  style={{ borderRadius: 20 }}
-  
-/>
+            src={logo}
+            alt="Vorion"
+            width={46}
+            height={46}
+            style={{ borderRadius: 20 }}
+          />
           <span style={{ fontWeight: 700, fontSize: 18, letterSpacing: '-0.02em' }}>Vorion Tracker</span>
         </div>
         <p style={{ color: 'rgba(248,250,252,.45)', fontSize: 13, marginBottom: 30 }}>Sign in to your workspace</p>
 
         <form onSubmit={handleLogin}>
           <label style={{ fontSize: 11, fontWeight: 600, display: 'block', marginBottom: 5, color: 'rgba(248,250,252,.6)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Email</label>
-          <input type="email" required value={email} onChange={e => setEmail(e.target.value)} autoFocus autoComplete="username" style={{
+          <input type="email" required value={email} onChange={e => setEmail(e.target.value)} autoFocus style={{
             width: '100%', padding: '10px 12px', borderRadius: 12,
             border: '1px solid rgba(248,250,252,.12)', background: 'rgba(248,250,252,.05)',
             color: '#F8FAFC', fontSize: 13, marginBottom: 14, outline: 'none',
@@ -63,7 +91,7 @@ export default function LoginPage() {
           }}/>
 
           <label style={{ fontSize: 11, fontWeight: 600, display: 'block', marginBottom: 5, color: 'rgba(248,250,252,.6)', letterSpacing: '0.05em', textTransform: 'uppercase' }}>Password</label>
-          <input type="password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" autoComplete="current-password" style={{
+          <input type="password" required value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" style={{
             width: '100%', padding: '10px 12px', borderRadius: 12,
             border: '1px solid rgba(248,250,252,.12)', background: 'rgba(248,250,252,.05)',
             color: '#F8FAFC', fontSize: 13, marginBottom: 18, outline: 'none',
@@ -86,6 +114,71 @@ export default function LoginPage() {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
+
+        <p style={{ fontSize: 11, color: 'rgba(248,250,252,.2)', textAlign: 'center', marginTop: 22 }}>
+          Default: admin@vorion.com / admin123
+        </p>
+
+        {/* Agent download section */}
+        <div style={{
+          marginTop: 22, paddingTop: 18,
+          borderTop: '1px solid rgba(248,250,252,.08)',
+        }}>
+          <p style={{
+            fontSize: 11, fontWeight: 600, color: 'rgba(248,250,252,.4)',
+            textAlign: 'center', marginBottom: 12,
+            textTransform: 'uppercase', letterSpacing: '0.05em',
+          }}>
+            Download Vorion Agent
+          </p>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+            {downloadPlatforms.map(p => (
+              p.url ? (
+                <a
+                  key={p.id}
+                  href={p.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    flex: 1, textAlign: 'center', padding: '10px 8px',
+                    borderRadius: 12, textDecoration: 'none',
+                    background: 'rgba(248,250,252,.05)',
+                    border: '1px solid rgba(248,250,252,.12)',
+                    color: '#F8FAFC', fontSize: 12, fontWeight: 600,
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                    transition: 'all .2s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'rgba(37,99,235,.15)';
+                    e.currentTarget.style.borderColor = 'rgba(37,99,235,.4)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'rgba(248,250,252,.05)';
+                    e.currentTarget.style.borderColor = 'rgba(248,250,252,.12)';
+                  }}
+                >
+                  <span style={{ fontSize: 18 }}>{p.icon}</span>
+                  {p.name}
+                </a>
+              ) : (
+                <span
+                  key={p.id}
+                  style={{
+                    flex: 1, textAlign: 'center', padding: '10px 8px',
+                    borderRadius: 12,
+                    background: 'rgba(248,250,252,.03)',
+                    border: '1px solid rgba(248,250,252,.08)',
+                    color: 'rgba(248,250,252,.3)', fontSize: 12, fontWeight: 600,
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                  }}
+                >
+                  <span style={{ fontSize: 18 }}>{p.icon}</span>
+                  {p.name}
+                </span>
+              )
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
