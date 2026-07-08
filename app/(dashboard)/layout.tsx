@@ -5,13 +5,32 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useAuthStore, canMonitorAll, canManageUsers, type Role } from '@/store/auth';
 import Image from 'next/image';
-import vorionLogo from '@/public/vorion-logo-light.png';
+import vorionLogo from '@/public/vorion-logo-dark.png';
+
+// ---- Vorion Brand Palette ----
+const BRAND = {
+  black: '#0A0E1A',       // primary background
+  blackSoft: '#10182B',   // panels / cards
+  white: '#F5F7FA',       // primary text
+  blue: '#1E5AE0',        // primary accent (from logo "V")
+  blueSoft: 'rgba(30,90,224,.16)',
+  yellow: '#F5C400',      // secondary accent (from logo sun icon)
+  yellowSoft: 'rgba(245,196,0,.12)',
+  border: 'rgba(245,247,250,.08)',
+  muted: 'rgba(245,247,250,.45)',
+  mutedFaint: 'rgba(245,247,250,.28)',
+  danger: '#FF5C7A',
+};
+
 const ROLE_COLOR: Record<Role, string> = {
-  super_admin: '#A78BFA', admin: '#818CF8', qa_manager: '#34D399',
-  team_lead: '#F8D000', employee: 'rgba(248,250,252,.5)',
+  super_admin: BRAND.blue,
+  admin: '#5B7FE8',
+  qa_manager: '#2FBF8F',
+  team_lead: BRAND.yellow,
+  employee: BRAND.muted,
 };
 const ROLE_LABEL: Record<Role, string> = {
-  super_admin: 'Super Admin', admin: 'Admin',  qa_manager: 'QA Manager',
+  super_admin: 'Super Admin', admin: 'Admin', qa_manager: 'QA Manager',
   team_lead: 'Team Lead', employee: 'Employee',
 };
 
@@ -21,12 +40,12 @@ const NavItem = ({ href, label, show = true }: { href: string; label: string; sh
   const active = path === href || path.startsWith(href + '/');
   return (
     <Link href={href} style={{
-      display: 'block', padding: '7px 10px', borderRadius: 10, fontSize: 13, marginBottom: 2,
-      background: active ? 'rgba(0,80,176,.35)' : 'transparent',
-      color: active ? '#F8FAFC' : 'rgba(248,250,252,.5)',
+      display: 'block', padding: '8px 12px', borderRadius: 8, fontSize: 13, marginBottom: 2,
+      background: active ? BRAND.blueSoft : 'transparent',
+      color: active ? BRAND.white : BRAND.muted,
       fontWeight: active ? 600 : 400,
-      borderLeft: active ? '2px solid #F8D000' : '2px solid transparent',
-      transition: 'all .15s',
+      borderLeft: active ? `2px solid ${BRAND.yellow}` : '2px solid transparent',
+      transition: 'all .15s ease',
       textDecoration: 'none',
     }}>
       {label}
@@ -51,67 +70,56 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     <div style={{
       display: 'flex', height: '100vh', overflow: 'hidden',
       fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif',
-      background: '#0B0F1A', color: '#F8FAFC',
+      background: BRAND.black, color: BRAND.white,
     }}>
       {/* Sidebar */}
       <aside style={{
-        width: 210, flexShrink: 0,
-        background: 'rgba(11,15,26,.85)',
-        borderRight: '1px solid rgba(248,250,252,.08)',
-        backdropFilter: 'blur(12px)',
+        width: 220, flexShrink: 0,
+        background: 'rgba(10,14,26,.9)',
+        borderRight: `1px solid ${BRAND.border}`,
+        backdropFilter: 'blur(14px)',
         display: 'flex', flexDirection: 'column',
-        padding: '18px 12px',
+        padding: '20px 14px',
       }}>
         {/* Logo */}
-      <div
-  style={{
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 6,
-    paddingLeft: 4,
-  }}
->
-  <Image
-    src={vorionLogo}
-    alt="Vorion Logo"
-    width={50}
-    height={50}
-    style={{
-      borderRadius: 8,
-      objectFit: 'contain',
-    }}
-  />
-  <span
-    style={{
-      fontSize: 16,
-      fontWeight: 600,
-      color: '#F8FAFC',
-    }}
-  >
-    Vorion Tracker
-  </span>
-</div>
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          marginBottom: 8, paddingLeft: 4, paddingBottom: 16,
+          borderBottom: `1px solid ${BRAND.border}`,
+        }}>
+          <Image
+            src={vorionLogo}
+            alt="Vorion Logo"
+            width={40}
+            height={40}
+            style={{ objectFit: 'contain' }}
+          />
+          <span style={{
+            fontSize: 16, fontWeight: 700, color: BRAND.white, letterSpacing: '0.01em',
+          }}>
+            Vorion <span style={{ color: BRAND.yellow, fontWeight: 700 }}>Tracker</span>
+          </span>
+        </div>
 
         {/* Role badge */}
         <div style={{
-          fontSize: 10, fontWeight: 600, padding: '3px 10px', borderRadius: 99,
-          background: 'rgba(248,250,252,.07)', color: ROLE_COLOR[role],
-          marginBottom: 18, alignSelf: 'flex-start',
-          border: `1px solid ${ROLE_COLOR[role]}30`,
-          letterSpacing: '0.04em',
+          fontSize: 10, fontWeight: 700, padding: '4px 11px', borderRadius: 99,
+          background: `${ROLE_COLOR[role]}18`, color: ROLE_COLOR[role],
+          margin: '16px 0 18px', alignSelf: 'flex-start',
+          border: `1px solid ${ROLE_COLOR[role]}40`,
+          letterSpacing: '0.06em', textTransform: 'uppercase',
         }}>
           {ROLE_LABEL[role]}
         </div>
 
         {/* Nav */}
         <nav style={{ flex: 1 }}>
-          <div style={{ fontSize: 10, fontWeight: 600, color: 'rgba(248,250,252,.3)', padding: '4px 10px 6px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Monitor</div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: BRAND.mutedFaint, padding: '4px 12px 8px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Monitor</div>
           <NavItem href="/dashboard"   label="Dashboard" />
           <NavItem href="/live"        label="Live Monitor"   show={canMonitorAll(role) || role === 'team_lead'} />
           <NavItem href="/screenshots" label="Screenshots" />
           <NavItem href="/timeline"    label="Timeline" />
-          <div style={{ fontSize: 10, fontWeight: 600, color: 'rgba(248,250,252,.3)', padding: '14px 10px 6px', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Reports</div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: BRAND.mutedFaint, padding: '18px 12px 8px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Reports</div>
           <NavItem href="/reports"     label="Reports" />
           <NavItem href="/security"    label="Security Policies" show={canManageUsers(role)} />
           <NavItem href="/users"       label="User Management" show={canManageUsers(role)} />
@@ -119,11 +127,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </nav>
 
         {/* User footer */}
-        <div style={{ borderTop: '1px solid rgba(248,250,252,.08)', paddingTop: 12 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>{user.name}</div>
-          <div style={{ fontSize: 11, color: 'rgba(248,250,252,.35)', marginBottom: 10 }}>{user.email}</div>
+        <div style={{ borderTop: `1px solid ${BRAND.border}`, paddingTop: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2, color: BRAND.white }}>{user.name}</div>
+          <div style={{ fontSize: 11, color: BRAND.mutedFaint, marginBottom: 10 }}>{user.email}</div>
           <button onClick={() => { logout(); router.replace('/login'); }} style={{
-            fontSize: 12, color: '#FF5C7A', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 500,
+            fontSize: 12, color: BRAND.danger, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600,
           }}>
             Sign out
           </button>
@@ -133,7 +141,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       {/* Main content */}
       <main style={{
         flex: 1, overflow: 'auto', padding: 28,
-        background: 'radial-gradient(1200px 600px at 20% 0%, rgba(0,80,176,.16), transparent 60%), radial-gradient(900px 500px at 80% 20%, rgba(248,208,0,.08), transparent 55%), #0B0F1A',
+        background: `radial-gradient(1200px 600px at 15% 0%, ${BRAND.blueSoft}, transparent 60%), radial-gradient(900px 500px at 85% 15%, ${BRAND.yellowSoft}, transparent 55%), ${BRAND.black}`,
       }}>
         {children}
       </main>

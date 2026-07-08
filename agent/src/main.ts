@@ -1,7 +1,12 @@
 // agent/src/main.ts  — Electron main process
 import * as dotenv from 'dotenv';
 import path from 'path';
+// Load agent .env as early as possible so service keys are available
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
+console.log('[AGENT] env load check', {
+  SUPABASE_URL: Boolean(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL),
+  SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+});
 import { app } from 'electron';
 import {
    BrowserWindow, Tray, Menu, nativeImage,

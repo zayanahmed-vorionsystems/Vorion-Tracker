@@ -5,6 +5,19 @@ import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth';
 import Image from "next/image";
 import logo from '@/public/vorion-logo-light.png';
+
+const agentDownloadUrls = {
+  win: process.env.NEXT_PUBLIC_AGENT_WIN_URL,
+  mac: process.env.NEXT_PUBLIC_AGENT_MAC_URL,
+  linux: process.env.NEXT_PUBLIC_AGENT_LINUX_URL,
+};
+
+const downloadPlatforms = [
+  { id: 'win',   icon: '🪟', name: 'Windows', url: agentDownloadUrls.win },
+  { id: 'mac',   icon: '🍎', name: 'macOS',   url: agentDownloadUrls.mac },
+  { id: 'linux', icon: '🐧', name: 'Linux',   url: agentDownloadUrls.linux },
+];
+
 export default function LoginPage() {
   const [email,    setEmail]    = useState('admin@company.com');
   const [password, setPassword] = useState('');
@@ -58,13 +71,12 @@ export default function LoginPage() {
         {/* Brand */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
           <Image
-  src={logo}
-  alt="Vorion"
-  width={46}
-  height={46}
-  style={{ borderRadius: 20 }}
-  
-/>
+            src={logo}
+            alt="Vorion"
+            width={46}
+            height={46}
+            style={{ borderRadius: 20 }}
+          />
           <span style={{ fontWeight: 700, fontSize: 18, letterSpacing: '-0.02em' }}>Vorion Tracker</span>
         </div>
         <p style={{ color: 'rgba(248,250,252,.45)', fontSize: 13, marginBottom: 30 }}>Sign in to your workspace</p>
@@ -106,6 +118,67 @@ export default function LoginPage() {
         <p style={{ fontSize: 11, color: 'rgba(248,250,252,.2)', textAlign: 'center', marginTop: 22 }}>
           Default: admin@vorion.com / admin123
         </p>
+
+        {/* Agent download section */}
+        <div style={{
+          marginTop: 22, paddingTop: 18,
+          borderTop: '1px solid rgba(248,250,252,.08)',
+        }}>
+          <p style={{
+            fontSize: 11, fontWeight: 600, color: 'rgba(248,250,252,.4)',
+            textAlign: 'center', marginBottom: 12,
+            textTransform: 'uppercase', letterSpacing: '0.05em',
+          }}>
+            Download Vorion Agent
+          </p>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+            {downloadPlatforms.map(p => (
+              p.url ? (
+                <a
+                  key={p.id}
+                  href={p.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    flex: 1, textAlign: 'center', padding: '10px 8px',
+                    borderRadius: 12, textDecoration: 'none',
+                    background: 'rgba(248,250,252,.05)',
+                    border: '1px solid rgba(248,250,252,.12)',
+                    color: '#F8FAFC', fontSize: 12, fontWeight: 600,
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                    transition: 'all .2s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = 'rgba(37,99,235,.15)';
+                    e.currentTarget.style.borderColor = 'rgba(37,99,235,.4)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'rgba(248,250,252,.05)';
+                    e.currentTarget.style.borderColor = 'rgba(248,250,252,.12)';
+                  }}
+                >
+                  <span style={{ fontSize: 18 }}>{p.icon}</span>
+                  {p.name}
+                </a>
+              ) : (
+                <span
+                  key={p.id}
+                  style={{
+                    flex: 1, textAlign: 'center', padding: '10px 8px',
+                    borderRadius: 12,
+                    background: 'rgba(248,250,252,.03)',
+                    border: '1px solid rgba(248,250,252,.08)',
+                    color: 'rgba(248,250,252,.3)', fontSize: 12, fontWeight: 600,
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                  }}
+                >
+                  <span style={{ fontSize: 18 }}>{p.icon}</span>
+                  {p.name}
+                </span>
+              )
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -249,11 +249,18 @@ export default function LiveMonitorPage() {
   useEffect(() => {
     return () => {
       if (channelRef.current) {
-        supabaseClient.removeChannel(channelRef.current);
+        try { supabaseClient.removeChannel(channelRef.current); } catch (err) { console.warn('[live-monitor] removeChannel error on unmount', err); }
         channelRef.current = null;
         channelReadyRef.current = null;
         channelEmployeeIdRef.current = null;
       }
+      // Clean up any active peer connection and media
+      try { peerRef.current?.close(); } catch (e) {}
+      peerRef.current = null;
+      try { if (videoRef.current) videoRef.current.srcObject = null; } catch (e) {}
+      remoteStreamRef.current = null;
+      clearConnectTimeout();
+      clearReconnectTimer();
     };
   }, []);
 
@@ -579,20 +586,27 @@ export default function LiveMonitorPage() {
       // Register listeners before subscribing so the channel is fully wired up.
       // Re-adding listeners after subscribe() throws the error shown in the logs.
       channel.on('presence', { event: 'sync' }, () => {
-        const state = channel.presenceState();
-        const presentAgents = Object.values(state as Record<string, any[]>).flat();
-        const online = presentAgents.some((entry: any) => entry?.online);
-        // The FIRST presence sync right after subscribing can legitimately
-        // come back empty even though the agent is online — there's a race
-        // between our subscribe completing and the agent's own .track()
-        // call reaching the server. Treat that as "not yet known" rather
-        // than "confirmed offline", and only fire handleAgentWentOffline()
-        // on a genuine online -> offline transition.
-        const previouslyKnownOnline = agentOnlineRef.current.get(employeeId);
-        agentOnlineRef.current.set(employeeId, online);
-        setAgents(prev => prev.map((item) => item.agentId === employeeId ? { ...item, online } : item));
-        if (!online && previouslyKnownOnline === true && activeEmployeeRef.current === employeeId) {
-          handleAgentWentOffline(employeeId);
+        try {
+          const state = channel.presenceState();
+          console.log('[live-monitor] presence sync', { employeeId, state });
+          const presentAgents = Object.values(state as Record<string, any[]>).flat();
+          console.log('[live-monitor] presentAgents', { employeeId, count: presentAgents.length, sample: presentAgents.slice(0,5) });
+          const online = presentAgents.some((entry: any) => entry?.online);
+          
+          // The FIRST presence sync right after subscribing can legitimately
+          // come back empty even though the agent is online — there's a race
+          // between our subscribe completing and the agent's own .track()
+          // call reaching the server. Treat that as "not yet known" rather
+          // than "confirmed offline", and only fire handleAgentWentOffline()
+          // on a genuine online -> offline transition.
+          const previouslyKnownOnline = agentOnlineRef.current.get(employeeId);
+          agentOnlineRef.current.set(employeeId, online);
+          setAgents(prev => prev.map((item) => item.agentId === employeeId ? { ...item, online } : item));
+          if (!online && previouslyKnownOnline === true && activeEmployeeRef.current === employeeId) {
+            handleAgentWentOffline(employeeId);
+          }
+        } catch (err) {
+          console.error('[live-monitor] presence sync handler error', err);
         }
       });
 
@@ -693,7 +707,6 @@ export default function LiveMonitorPage() {
         const timeout = setTimeout(() => {
           reject(new Error('Channel subscribe timed out'));
         }, CHANNEL_SUBSCRIBE_TIMEOUT_MS);
-
         channel.subscribe((status: string, err?: Error) => {
           console.log('[live-monitor] channel status:', status, err ? `error: ${err.message}` : '');
           if (status === 'SUBSCRIBED') {
@@ -701,9 +714,27 @@ export default function LiveMonitorPage() {
             void channel.track({ online: true, adminId: adminIdRef.current, role: user?.role || 'admin' });
             resolve();
           }
+
           if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
             clearTimeout(timeout);
-            reject(new Error(`Channel subscribe failed: ${status}${err ? ` (${err.message})` : ''}`));
+            const errMsg = `Channel subscribe failed: ${status}${err ? ` (${err.message})` : ''}`;
+            console.error('[live-monitor][ERR]', errMsg);
+            // If the channel that failed is the one we're tracking, tear it down
+            // and attempt a background reconnect after a short delay. This helps
+            // recover from transient socket drops without requiring a page reload.
+            if (channelRef.current === channel) {
+              try {
+                supabaseClient.removeChannel(channel).catch(() => {});
+              } catch (_e) {}
+              channelRef.current = null;
+              channelReadyRef.current = null;
+              channelEmployeeIdRef.current = null;
+              setTimeout(() => {
+                // best-effort re-establish
+                void ensureChannel(employeeId).then(() => {}).catch(() => {});
+              }, 2500);
+            }
+            reject(new Error(errMsg));
           }
         });
       });

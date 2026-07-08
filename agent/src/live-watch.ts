@@ -13,7 +13,7 @@ let resolveCaptureRendererReady: (() => void) | null = null;
 let liveChannel: RealtimeChannel | null = null;
 let liveChannelEmployeeId: string | null = null;
 let activeAdminIds = new Set<string>();
-let pendingCaptureRequests: Array<{ adminId: string; offer?: any; requestId?: string }> = [];
+let pendingCaptureRequests: Array<{ employeeId: string; adminId: string; offer?: any; requestId?: string }> = [];
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co';
 console.log('[AGENT] Supabase URL being used:', SUPABASE_URL);
@@ -37,16 +37,25 @@ if (!SUPABASE_SERVICE_ROLE_KEY) {
     'If your Realtime RLS policies check auth.uid(), the agent will silently fail to receive/send signals.');
 }
 
-const supabaseClient = createClient(
-  SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY || SUPABASE_ANON_KEY,
-  {
+console.log('[AGENT] live-watch env status', { SUPABASE_URL: Boolean(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL), hasServiceKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY) });
+
+let supabaseClient: ReturnType<typeof createClient> | null = null;
+
+function getSupabaseClient() {
+  if (supabaseClient) return supabaseClient;
+  // Re-read envs at use-time so dotenv has a chance to run in the main
+  // process before the client is constructed (avoids creating the client
+  // at import time before main.ts calls dotenv.config()).
+  const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || SUPABASE_SERVICE_ROLE_KEY || '';
+  const anon = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || SUPABASE_ANON_KEY;
+  console.log('[AGENT] creating Supabase client', { url: String(url), usingServiceKey: Boolean(serviceKey) });
+  supabaseClient = createClient(url, serviceKey || anon, {
     auth: { persistSession: false, storage: undefined },
-    realtime: {
-      transport: ws as any,
-    },
-  }
-);
+    realtime: { transport: ws as any },
+  });
+  return supabaseClient;
+}
 
 function logErrorWithStack(message: string, error: unknown) {
   console.error(message);
@@ -89,6 +98,17 @@ function getOrCreateCaptureWindow(): { win: BrowserWindow; ready: Promise<void> 
       nodeIntegration: false,
     },
   });
+
+  // Forward renderer console logs from the hidden capture window to the
+  // main process console to make debugging easier.
+  try {
+    win.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+      console.log('[CAPTURE]', message, { level, line, sourceId });
+    });
+  } catch (err) {
+    // Some Electron versions may not support the event signature exactly;
+    // ignore if attaching fails.
+  }
 
   captureWindow = win;
   captureWindowReady = false;
@@ -174,7 +194,7 @@ async function waitForCaptureRendererReady(timeoutMs = 8000) {
   }
 }
 
-async function sendStartCapture(win: BrowserWindow, adminId: string, offer?: any, requestId?: string) {
+async function sendStartCapture(win: BrowserWindow, employeeId: string, adminId: string, offer?: any, requestId?: string) {
   await waitForCaptureRendererReady();
 
   const sources = await desktopCapturer.getSources({
@@ -209,8 +229,8 @@ async function sendStartCapture(win: BrowserWindow, adminId: string, offer?: any
 
   if (win.isDestroyed()) return;
 
-  console.log('[AGENT] sending start-capture to hidden capture window', { adminId, requestId, sourceId: chosen.id, hasOffer: Boolean(offer) });
-  win.webContents.send('start-capture', { sourceId: chosen.id, adminId, offer, requestId });
+  console.log('[AGENT] sending start-capture to hidden capture window', { employeeId, adminId, requestId, sourceId: chosen.id, hasOffer: Boolean(offer) });
+  win.webContents.send('start-capture', { sourceId: chosen.id, employeeId, adminId, offer, requestId });
 }
 
 async function flushPendingCaptureRequests() {
@@ -223,15 +243,15 @@ async function flushPendingCaptureRequests() {
     try {
       const { win, ready } = getOrCreateCaptureWindow();
       await ready;
-      await sendStartCapture(win, request.adminId, request.offer, request.requestId);
+      await sendStartCapture(win, request.employeeId, request.adminId, request.offer, request.requestId);
     } catch (error: any) {
       logErrorWithStack('[AGENT][ERR] unable to flush pending screen capture request', error);
     }
   }
 }
 
-function queueStartCapture(adminId: string, offer?: any, requestId?: string) {
-  pendingCaptureRequests.push({ adminId, offer, requestId });
+function queueStartCapture(employeeId: string, adminId: string, offer?: any, requestId?: string) {
+  pendingCaptureRequests.push({ employeeId, adminId, offer, requestId });
   void flushPendingCaptureRequests();
 }
 
@@ -244,19 +264,35 @@ function ensureChannel(employeeId: string) {
     return liveChannel;
   }
   if (liveChannel) {
-    supabaseClient.removeChannel(liveChannel);
+    try { getSupabaseClient().removeChannel(liveChannel); } catch { /* ignore */ }
   }
 
   // NOTE: `private: true` and `broadcast.ack: true` MUST match the admin
   // dashboard's channel config exactly, otherwise the two sides won't be
   // able to see each other's broadcasts even though they share a topic name.
-  const channel = supabaseClient.channel(getChannelName(employeeId), {
+  const channel = getSupabaseClient().channel(getChannelName(employeeId), {
     config: {
       broadcast: { self: false, ack: true },
       presence: { key: employeeId },
       private: true,
     },
   });
+
+  // Log presence syncs for debugging presence/online state
+  try {
+    channel.on('presence', { event: 'sync' }, () => {
+      try {
+        const state = channel.presenceState();
+        console.log('[AGENT] channel.presenceState', { employeeId, state });
+        const presentAgents = Object.values(state as Record<string, any[]>).flat();
+        console.log('[AGENT] presentAgents', { employeeId, count: presentAgents.length, sample: presentAgents.slice(0, 5) });
+      } catch (err) {
+        console.warn('[AGENT] failed to read presenceState', err);
+      }
+    });
+  } catch (err) {
+    console.warn('[AGENT] attaching presence listener failed', err);
+  }
 
   channel.on('broadcast', { event: 'offer' }, ({ payload }: { payload: any }) => {
     console.log('[AGENT] Offer broadcast event fired, payload:', JSON.stringify(payload));
@@ -270,13 +306,9 @@ function ensureChannel(employeeId: string) {
     void (async () => {
       try {
         const requestId = typeof payload?.requestId === 'string' ? payload.requestId : undefined;
-        if (!captureWindowReady) {
-          queueStartCapture(adminId, payload?.sdp, requestId);
-          return;
-        }
         const { win, ready } = getOrCreateCaptureWindow();
         await ready;
-        await sendStartCapture(win, adminId, payload?.sdp, requestId);
+        await sendStartCapture(win, employeeId, adminId, payload?.sdp, requestId);
       } catch (error: any) {
         logErrorWithStack('[AGENT][ERR] unable to start screen capture for stream request', error);
       }
@@ -314,30 +346,43 @@ function ensureChannel(employeeId: string) {
   // delay, guarding against a stale callback racing a newer channel that
   // ensureChannel() may have already created.
   // ───────────────────────────────────────────────────────────────────────
-  channel.subscribe((status, err) => {
-    console.log('[AGENT] Realtime channel status:', status, err ? `error: ${err.message || err}` : '');
-    if (status === 'SUBSCRIBED') {
-      channel.track({ online: true, employeeId, updatedAt: Date.now() });
+let isTearingDownChannel = false;
+
+channel.subscribe((status, err) => {
+  console.log('[AGENT] Realtime channel status:', status, err ? `error: ${err.message || String(err)}` : '');
+
+  if (status === 'SUBSCRIBED') {
+    channel.track({ online: true, employeeId, updatedAt: Date.now() });
+    return;
+  }
+
+  if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+    console.error(
+      '[AGENT][ERR] Channel subscribe failed, will retry in 3s:', status,
+      err ? `(${err.message || String(err)})` : '(if this repeats, it is very likely an RLS policy blocking this ' +
+        'connection — check that SUPABASE_SERVICE_ROLE_KEY is set, or that auth.uid()-based policies allow it)'
+    );
+
+    if (liveChannel !== channel || isTearingDownChannel) {
+      return;
     }
-    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-      console.error(
-        '[AGENT][ERR] Channel subscribe failed, will retry in 3s:', status,
-        err ? `(${err.message || err})` : '(if this repeats, it is very likely an RLS policy blocking this ' +
-          'connection — check that SUPABASE_SERVICE_ROLE_KEY is set, or that auth.uid()-based policies allow it)'
-      );
-      // Only tear down/retry if this callback still belongs to the
-      // "current" channel. ensureChannel() may have already replaced
-      // liveChannel by the time this fires (e.g. setupLiveWatch called
-      // again for a different employee) — in that case, do nothing and let
-      // the newer channel's own subscribe callback own retries.
-      if (liveChannel === channel) {
-        supabaseClient.removeChannel(channel);
-        liveChannel = null;
-        liveChannelEmployeeId = null;
-        setTimeout(() => ensureChannel(employeeId), 3000);
-      }
-    }
-  });
+
+    isTearingDownChannel = true;
+    liveChannel = null;
+    liveChannelEmployeeId = null;
+
+    // IMPORTANT: removeChannel() ko is onClose callback ke andar se
+    // synchronously call karna crash karta hai (reentrant recursion,
+    // stack overflow). Isay agle event loop tick tak defer karna hai.
+    setImmediate(() => {
+      getSupabaseClient().removeChannel(channel).catch((removeErr: any) => {
+        console.error('[AGENT][ERR] removeChannel failed (safe to ignore):', removeErr?.message || String(removeErr));
+      });
+      isTearingDownChannel = false;
+      setTimeout(() => ensureChannel(employeeId), 3000);
+    });
+  }
+});
 
   liveChannel = channel;
   liveChannelEmployeeId = employeeId;
@@ -345,6 +390,7 @@ function ensureChannel(employeeId: string) {
 }
 
 export function setupLiveWatch(employeeId: string) {
+  console.log('[AGENT] setupLiveWatch called', { employeeId, hasServiceKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY), supabaseUrl: !!(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL) });
   ensureChannel(employeeId); // channel is stored in liveChannel; no need to keep a local reference
 
   if (!listenersBound) {
@@ -399,8 +445,8 @@ export function teardownLiveWatch() {
   captureWindow = null;
   windowReadyPromise = null;
   captureWindowReady = false;
-   if (liveChannel) {
-    supabaseClient.removeChannel(liveChannel);  // was: liveChannel?.unsubscribe();
+  if (liveChannel) {
+    try { getSupabaseClient().removeChannel(liveChannel).catch(() => {}); } catch { }
   }
   liveChannel = null;
   liveChannelEmployeeId = null;

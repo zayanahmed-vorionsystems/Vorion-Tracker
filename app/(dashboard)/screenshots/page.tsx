@@ -3,6 +3,21 @@
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/auth';
 
+// ---- Vorion Brand Palette (kept consistent with sidebar layout & dashboard) ----
+const BRAND = {
+  black: '#0A0E1A',
+  blackSoft: '#10182B',
+  white: '#F5F7FA',
+  blue: '#1E5AE0',
+  blueSoft: 'rgba(30,90,224,.16)',
+  yellow: '#F5C400',
+  yellowSoft: 'rgba(245,196,0,.12)',
+  border: 'rgba(245,247,250,.08)',
+  muted: 'rgba(245,247,250,.5)',
+  mutedFaint: 'rgba(245,247,250,.3)',
+  danger: '#FF5C7A',
+};
+
 export default function ScreenshotsPage() {
   const { token } = useAuthStore();
   const [shots,   setShots]   = useState<any[]>([]);
@@ -54,103 +69,113 @@ export default function ScreenshotsPage() {
   return (
     <div>
       <div style={{ display:'flex',gap:10,alignItems:'center',marginBottom:20,flexWrap:'wrap' }}>
-        <h1
-style={{
-    fontSize:34,
-    fontWeight:800,
-    color:"#F8FAFC",
-    margin:0,
-    flex:1,
-}}
->
-🖼️ Screenshots
-</h1>
+        <h1 style={{ fontSize: 28, fontWeight: 800, color: BRAND.white, margin: 0, flex: 1 }}>
+          Screenshots
+        </h1>
         <select value={userId} onChange={e=>setUserId(e.target.value)}
-          style={{ padding:'12px 14px',
-borderRadius:14,
-border:'1px solid rgba(255,255,255,.08)',
-background:'rgba(255,255,255,.05)',
-backdropFilter:'blur(12px)',
-color:'#F8FAFC',
-fontSize:13,
-outline:'none',
-transition:'all .2s ease', }}>
+          style={{
+            padding: '12px 14px',
+            borderRadius: 14,
+            border: `1px solid ${BRAND.border}`,
+            background: 'rgba(245,247,250,.05)',
+            backdropFilter: 'blur(12px)',
+            color: BRAND.white,
+            fontSize: 13,
+            outline: 'none',
+            transition: 'all .2s ease',
+          }}>
           <option value="">All employees</option>
           {users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
         </select>
         <input type="date" value={date} onChange={e=>setDate(e.target.value)}
-          style={{ padding:'7px 10px',borderRadius:8,border:'0.5px solid #e2e8f0',fontSize:13,background:'#fff' }}/>
+          style={{
+            padding: '8px 12px',
+            borderRadius: 12,
+            border: `1px solid ${BRAND.border}`,
+            background: 'rgba(245,247,250,.06)',
+            color: BRAND.white,
+            fontSize: 13,
+            outline: 'none',
+            cursor: 'pointer',
+          }}/>
       </div>
 
-      {loading ? <div style={{ textAlign:'center',padding:60,color:'#94a3b8',fontSize:13 }}>📷 Loading screenshots...</div> : error ? (
-        <div style={{ textAlign:'center',padding:'16px',
-borderRadius:14,
-background:'rgba(239,68,68,.12)',
-border:'1px solid rgba(239,68,68,.25)',
-color:'#FCA5A5',
-fontWeight:600,fontSize:13 }}>{error}</div>
+      {loading ? (
+        <div style={{ textAlign:'center',padding:60,color:BRAND.mutedFaint,fontSize:13 }}>Loading screenshots…</div>
+      ) : error ? (
+        <div style={{
+          textAlign: 'center',
+          padding: '16px',
+          borderRadius: 14,
+          background: 'rgba(255,92,122,.1)',
+          border: `1px solid ${BRAND.danger}40`,
+          color: BRAND.danger,
+          fontWeight: 600, fontSize: 13,
+        }}>{error}</div>
       ) : (
-        <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',
-gap:20, }}>
+        <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:20 }}>
           {shots.map(s=>(
             <div
-key={s.id}
-onClick={()=>setPreview(s.file_url)}
-onMouseEnter={(e)=>{
-e.currentTarget.style.transform='translateY(-6px)';
-e.currentTarget.style.boxShadow='0 25px 55px rgba(0,0,0,.45)';
-}}
-onMouseLeave={(e)=>{
-e.currentTarget.style.transform='translateY(0)';
-e.currentTarget.style.boxShadow='0 15px 35px rgba(0,0,0,.35)';
-}}
-             style={{
-background:'rgba(20,25,40,.72)',
-backdropFilter:'blur(20px)',
-border:'1px solid rgba(255,255,255,.08)',
-borderRadius:18,
-overflow:'hidden',
-cursor:'pointer',
-transition:'all .25s ease',
-boxShadow:'0 15px 35px rgba(0,0,0,.35)',
-}}>
-              <div style={{ aspectRatio:'16/9',background:'#020617',overflow:'hidden' }}>
-                <img src={s.file_url} alt="" style={{ width:'100%',height:'100%',objectFit:'cover',
-transition:'transform .3s ease', }}onMouseEnter={(e)=>{
-e.currentTarget.style.transform='scale(1.05)';
-}}
-
-onMouseLeave={(e)=>{
-e.currentTarget.style.transform='scale(1)';
-}}
+              key={s.id}
+              onClick={()=>setPreview(s.file_url)}
+              onMouseEnter={(e)=>{
+                e.currentTarget.style.transform='translateY(-6px)';
+                e.currentTarget.style.boxShadow='0 25px 55px rgba(0,0,0,.45)';
+                e.currentTarget.style.borderColor = `${BRAND.blue}40`;
+              }}
+              onMouseLeave={(e)=>{
+                e.currentTarget.style.transform='translateY(0)';
+                e.currentTarget.style.boxShadow='0 15px 35px rgba(0,0,0,.35)';
+                e.currentTarget.style.borderColor = BRAND.border;
+              }}
+              style={{
+                background: 'rgba(16,24,43,.75)',
+                backdropFilter: 'blur(20px)',
+                border: `1px solid ${BRAND.border}`,
+                borderRadius: 18,
+                overflow: 'hidden',
+                cursor: 'pointer',
+                transition: 'all .25s ease',
+                boxShadow: '0 15px 35px rgba(0,0,0,.35)',
+              }}>
+              <div style={{ aspectRatio:'16/9',background:BRAND.black,overflow:'hidden' }}>
+                <img src={s.file_url} alt="" style={{ width:'100%',height:'100%',objectFit:'cover',transition:'transform .3s ease' }}
+                  onMouseEnter={(e)=>{ e.currentTarget.style.transform='scale(1.05)'; }}
+                  onMouseLeave={(e)=>{ e.currentTarget.style.transform='scale(1)'; }}
                   onError={e=>(e.currentTarget.style.display='none')}/>
               </div>
               <div style={{ padding:'8px 10px' }}>
-                <div style={{ fontSize:14,
-fontWeight:700,
-color:'#F8FAFC',marginBottom:2 }}>{s.user_name}</div>
-                <div style={{ fontSize:10,color:'#94a3b8',display:'flex',justifyContent:'space-between' }}>
+                <div style={{ fontSize:14, fontWeight:700, color:BRAND.white, marginBottom:2 }}>{s.user_name}</div>
+                <div style={{ fontSize:10, color:BRAND.mutedFaint, display:'flex', justifyContent:'space-between' }}>
                   <span>{s.active_app||'—'}</span>
                   <span>{new Date(s.captured_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>
                 </div>
-                <div style={{ marginTop:4,height:3,background:'#020617',borderRadius:2 }}>
-                  <div style={{ height:'100%',borderRadius:2,width:`${s.activity_pct||0}%`,background:
-(s.activity_pct||0)<30
-?'linear-gradient(90deg,#F59E0B,#FB923C)'
-:'linear-gradient(90deg,#22C55E,#06B6D4)', }}/>
+                <div style={{ marginTop:4,height:3,background:BRAND.black,borderRadius:2 }}>
+                  <div style={{
+                    height:'100%',
+                    borderRadius:2,
+                    width:`${s.activity_pct||0}%`,
+                    background: (s.activity_pct||0)<30 ? BRAND.yellow : BRAND.blue,
+                  }}/>
                 </div>
               </div>
             </div>
           ))}
-          {!shots.length&&<div style={{ gridColumn:'1/-1',textAlign:'center',padding:60,color:'#94a3b8',fontSize:13 }}>🖼️ No screenshots found for the selected date.</div>}
+          {!shots.length && (
+            <div style={{ gridColumn:'1/-1',textAlign:'center',padding:60,color:BRAND.mutedFaint,fontSize:13 }}>
+              No screenshots found for the selected date.
+            </div>
+          )}
         </div>
       )}
 
       {preview&&(
-        <div onClick={()=>setPreview(null)} style={{ position:'fixed',inset:0,background:'rgba(2,6,23,.92)',
-backdropFilter:'blur(12px)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:999,cursor:'pointer' }}>
-          <img src={preview} style={{ maxWidth:'92vw',maxHeight:'92vh',borderRadius:20,
-boxShadow:'0 25px 60px rgba(0,0,0,.5)', }}/>
+        <div onClick={()=>setPreview(null)} style={{
+          position:'fixed', inset:0, background:'rgba(10,14,26,.92)',
+          backdropFilter:'blur(12px)', display:'flex', alignItems:'center', justifyContent:'center',
+          zIndex:999, cursor:'pointer',
+        }}>
+          <img src={preview} style={{ maxWidth:'92vw', maxHeight:'92vh', borderRadius:20, boxShadow:'0 25px 60px rgba(0,0,0,.5)' }}/>
         </div>
       )}
     </div>

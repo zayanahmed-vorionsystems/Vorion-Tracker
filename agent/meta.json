@@ -1,0 +1,21 @@
+{
+  "inputs": {
+    "src/capture-renderer.ts": {
+      "bytes": 5494,
+      "imports": []
+    }
+  },
+  "outputs": {
+    "dist/capture-renderer.js": {
+      "imports": [],
+      "exports": [],
+      "entryPoint": "src/capture-renderer.ts",
+      "inputs": {
+        "src/capture-renderer.ts": {
+          "bytesInOutput": 5259
+        }
+      },
+      "bytes": 5317
+    }
+  }
+}

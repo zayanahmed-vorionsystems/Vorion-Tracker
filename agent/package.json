@@ -5,7 +5,7 @@
   "main": "dist/main.js",
   "scripts": {
     "dev": "concurrently \"vite\" \"tsc -p tsconfig.electron.json --watch\" \"esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=dist/capture-renderer.js --watch\" \"node scripts/copy-electron-assets.cjs\" \"wait-on http://localhost:5174 && wait-on dist/main.js && electron .\"",
-    "build": "vite build && tsc -p tsconfig.electron.json && esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=dist/capture-renderer.js && esbuild src/capture-preload.ts --bundle --platform=node --format=cjs --outfile=dist/capture-preload.js && node scripts/copy-electron-assets.cjs && electron-builder --win",
+    "build": "vite build && tsc -p tsconfig.electron.json && esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=dist/capture-renderer.js && esbuild src/capture-preload.ts --bundle --platform=node --external:electron --format=cjs --outfile=dist/capture-preload.js && node scripts/copy-electron-assets.cjs && electron-builder --win",
     "pack": "electron-builder --dir"
   },
   "dependencies": {

@@ -6,28 +6,30 @@ import { useAuthStore } from '@/store/auth';
 import Link from 'next/link';
 function fmt(s:number){ return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`; }
 
-const COLORS = {
-  bg: '#0B0F1A',
-  card: '#12172A',
-  cardBorder: 'rgba(255,255,255,.08)',
-  text: '#F8FAFC',
-  textMuted: '#9AA3B2',
-  textFaint: 'rgba(248,250,252,.35)',
-  grid: 'rgba(255,255,255,.08)',
-  blue: '#3B82F6',
-  blueLight: '#60A5FA',
-  purple: '#A78BFA',
-  tooltipBg: '#1F2937',
+// ---- Vorion Brand Palette (kept consistent with dashboard/sidebar) ----
+const BRAND = {
+  black: '#0A0E1A',
+  blackSoft: '#10182B',
+  white: '#F5F7FA',
+  blue: '#1E5AE0',
+  blueSoft: 'rgba(30,90,224,.16)',
+  yellow: '#F5C400',
+  yellowSoft: 'rgba(245,196,0,.12)',
+  border: 'rgba(245,247,250,.08)',
+  muted: 'rgba(245,247,250,.5)',
+  mutedFaint: 'rgba(245,247,250,.3)',
+  danger: '#FF5C7A',
 };
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
     minHeight: '100vh',
     background: `
-linear-gradient(180deg,#020617,#0F172A),
-radial-gradient(circle at top left,#2563EB30 0%,transparent 35%),
-radial-gradient(circle at bottom right,#9333EA20 0%,transparent 40%)
+linear-gradient(180deg,${BRAND.black},${BRAND.blackSoft}),
+radial-gradient(circle at top left,${BRAND.blueSoft} 0%,transparent 35%),
+radial-gradient(circle at bottom right,${BRAND.yellowSoft} 0%,transparent 40%)
 `,
+    color: BRAND.white,
     fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif',
     padding: '28px 32px',
   },
@@ -35,24 +37,24 @@ radial-gradient(circle at bottom right,#9333EA20 0%,transparent 40%)
     fontSize: 28,
     fontWeight: 700,
     marginBottom: 24,
-    color: COLORS.text,
+    color: BRAND.white,
     letterSpacing: '-0.01em',
   },
   cardHeader:{
 fontSize:15,
 fontWeight:700,
 marginBottom:20,
-color:"#F8FAFC",
+color:BRAND.white,
 letterSpacing:'.02em',
 },
   card:{
-background:'rgba(20,25,40,.72)',
+background:'rgba(16,24,43,.75)',
 backdropFilter:'blur(20px)',
 WebkitBackdropFilter:'blur(20px)',
-border:'1px solid rgba(255,255,255,.08)',
+border:`1px solid ${BRAND.border}`,
 borderRadius:22,
 padding:'24px',
-boxShadow:'0 20px 50px rgba(0,0,0,.35)',
+boxShadow:'0 20px 50px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05)',
 transition:'all .25s ease',
 },
   grid: {
@@ -62,8 +64,8 @@ transition:'all .25s ease',
     marginBottom: 16,
   },
   tableCard: {
-    border: `1px solid ${COLORS.cardBorder}`,
-    background: COLORS.card,
+    border: `1px solid ${BRAND.border}`,
+    background: 'rgba(16,24,43,.78)',
     backdropFilter: 'blur(10px)',
     borderRadius: 16,
     overflow: 'hidden',
@@ -72,10 +74,10 @@ transition:'all .25s ease',
   },
   tableHeader: {
     padding: '14px 16px',
-    borderBottom: `1px solid ${COLORS.cardBorder}`,
+    borderBottom: `1px solid ${BRAND.border}`,
     fontSize: 14,
     fontWeight: 600,
-    color: COLORS.text,
+    color: BRAND.white,
   },
   table: {
     width: '100%',
@@ -86,34 +88,34 @@ transition:'all .25s ease',
     padding: '9px 16px',
     textAlign: 'left',
     fontWeight: 500,
-    color: COLORS.textFaint,
+    color: BRAND.mutedFaint,
     fontSize: 11,
     textTransform: 'uppercase',
     letterSpacing: '0.06em',
-    borderBottom: `1px solid ${COLORS.cardBorder}`,
+    borderBottom: `1px solid ${BRAND.border}`,
   },
   td: {
     padding: '9px 16px',
-    color: COLORS.text,
+    color: BRAND.white,
   },
   emptyState: {
     height: 200,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    color: COLORS.textMuted,
+    color: BRAND.mutedFaint,
     fontSize: 13,
   },
 };
 
-const axisTickStyle = { fontSize: 12, fill: COLORS.textMuted, fontWeight: 500 };
+const axisTickStyle = { fontSize: 12, fill: BRAND.muted, fontWeight: 500 };
 
 const tooltipStyle={
-background:'rgba(15,23,42,.95)',
-border:'1px solid rgba(255,255,255,.08)',
+background:'rgba(10,14,26,.95)',
+border:`1px solid ${BRAND.border}`,
 borderRadius:14,
 backdropFilter:'blur(12px)',
-color:'#F8FAFC',
+color:BRAND.white,
 padding:'10px 14px',
 boxShadow:'0 15px 35px rgba(0,0,0,.45)',
 };
@@ -128,19 +130,19 @@ value:any;
 return(
 <div
 style={{
-background:'rgba(20,25,40,.72)',
+background:'rgba(16,24,43,.75)',
 backdropFilter:'blur(20px)',
-border:'1px solid rgba(255,255,255,.08)',
+border:`1px solid ${BRAND.border}`,
 borderRadius:20,
 padding:'20px',
-boxShadow:'0 15px 35px rgba(0,0,0,.35)',
+boxShadow:'0 15px 40px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05)',
 }}
 >
 
 <div
 style={{
 fontSize:12,
-color:'#94A3B8',
+color:BRAND.muted,
 textTransform:'uppercase',
 }}
 >
@@ -152,7 +154,7 @@ style={{
 marginTop:10,
 fontSize:30,
 fontWeight:800,
-background:'linear-gradient(90deg,#3B82F6,#A78BFA)',
+background:`linear-gradient(90deg,${BRAND.blue},${BRAND.yellow})`,
 WebkitBackgroundClip:'text',
 color:'transparent',
 }}
@@ -217,7 +219,7 @@ style={{
     fontSize:34,
     fontWeight:800,
     margin:0,
-    color:"#F8FAFC",
+    color:BRAND.white,
 }}
 >
 📊 Reports & Analytics
@@ -227,10 +229,10 @@ href="/reports/security"
 style={{
 padding:'10px 18px',
 borderRadius:14,
-background:'rgba(255,255,255,.05)',
-border:'1px solid rgba(255,255,255,.08)',
+background:'rgba(245,247,250,.05)',
+border:`1px solid ${BRAND.border}`,
 backdropFilter:'blur(12px)',
-color:'#F8FAFC',
+color:BRAND.white,
 fontWeight:600,
 fontSize:13,
 textDecoration:'none',
@@ -277,28 +279,30 @@ style={styles.card}
 onMouseEnter={(e)=>{
 e.currentTarget.style.transform='translateY(-6px)';
 e.currentTarget.style.boxShadow='0 28px 60px rgba(0,0,0,.45)';
+e.currentTarget.style.borderColor=`${BRAND.blue}40`;
 }}
 onMouseLeave={(e)=>{
 e.currentTarget.style.transform='translateY(0)';
-e.currentTarget.style.boxShadow='0 20px 50px rgba(0,0,0,.35)';
+e.currentTarget.style.boxShadow='0 20px 50px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05)';
+e.currentTarget.style.borderColor=BRAND.border;
 }}
 >
           <div style={styles.cardHeader}>Hours worked today</div>
           {hasDaily ? (
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={chartDaily} margin={{ top:8, right:8, left:-20, bottom:0 }}>
-                <CartesianGrid strokeDasharray="4 4" stroke={COLORS.grid} vertical={false} />
+                <defs>
+                  <linearGradient id="hoursGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={BRAND.blue}/>
+                    <stop offset="100%" stopColor="#4C8CFF"/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="4 4" stroke={BRAND.border} vertical={false} />
                 <XAxis dataKey="name" tick={axisTickStyle} axisLine={false} tickLine={false}/>
                 <YAxis tick={axisTickStyle} axisLine={false} tickLine={false}/>
-                <Tooltip formatter={(v:any)=>`${v}h`} contentStyle={tooltipStyle} cursor={{ fill: 'rgba(255,255,255,.04)' }}/>
+                <Tooltip formatter={(v:any)=>`${v}h`} contentStyle={tooltipStyle} cursor={{ fill: 'rgba(245,247,250,.04)' }}/>
                 <Bar dataKey="hours" fill="url(#hoursGradient)" radius={[6,6,0,0]} maxBarSize={48}/>
               </BarChart>
-              <defs>
-<linearGradient id="hoursGradient" x1="0" y1="0" x2="0" y2="1">
-<stop offset="0%" stopColor="#3B82F6"/>
-<stop offset="100%" stopColor="#06B6D4"/>
-</linearGradient>
-</defs>
             </ResponsiveContainer>
           ) : (
             <div style={styles.emptyState}>📊 No activity recorded yet today</div>
@@ -306,23 +310,35 @@ e.currentTarget.style.boxShadow='0 20px 50px rgba(0,0,0,.35)';
         </div>
 
         {/* Activity % bar chart */}
-        <div style={styles.card}>
+        <div
+style={styles.card}
+onMouseEnter={(e)=>{
+e.currentTarget.style.transform='translateY(-6px)';
+e.currentTarget.style.boxShadow='0 28px 60px rgba(0,0,0,.45)';
+e.currentTarget.style.borderColor=`${BRAND.yellow}40`;
+}}
+onMouseLeave={(e)=>{
+e.currentTarget.style.transform='translateY(0)';
+e.currentTarget.style.boxShadow='0 20px 50px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05)';
+e.currentTarget.style.borderColor=BRAND.border;
+}}
+>
           <div style={styles.cardHeader}>Activity level today (%)</div>
           {hasDaily ? (
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={chartDaily} margin={{ top:8, right:8, left:-20, bottom:0 }}>
-                <CartesianGrid strokeDasharray="4 4" stroke={COLORS.grid} vertical={false} />
+                <defs>
+                  <linearGradient id="activityGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={BRAND.yellow}/>
+                    <stop offset="100%" stopColor="#FFE066"/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="4 4" stroke={BRAND.border} vertical={false} />
                 <XAxis dataKey="name" tick={axisTickStyle} axisLine={false} tickLine={false}/>
                 <YAxis tick={axisTickStyle} axisLine={false} tickLine={false} domain={[0,100]}/>
-                <Tooltip formatter={(v:any)=>`${v}%`} contentStyle={tooltipStyle} cursor={{ fill: 'rgba(255,255,255,.04)' }}/>
+                <Tooltip formatter={(v:any)=>`${v}%`} contentStyle={tooltipStyle} cursor={{ fill: 'rgba(245,247,250,.04)' }}/>
                 <Bar dataKey="activity" fill="url(#activityGradient)" radius={[6,6,0,0]} maxBarSize={48}/>
               </BarChart>
-              <defs>
-<linearGradient id="activityGradient" x1="0" y1="0" x2="0" y2="1">
-<stop offset="0%" stopColor="#8B5CF6"/>
-<stop offset="100%" stopColor="#EC4899"/>
-</linearGradient>
-</defs>
             </ResponsiveContainer>
           ) : (
             <div style={styles.emptyState}>No activity recorded yet today</div>
@@ -331,26 +347,38 @@ e.currentTarget.style.boxShadow='0 20px 50px rgba(0,0,0,.35)';
       </div>
 
       {/* Weekly trend line chart */}
-      <div style={styles.card}>
+      <div
+style={styles.card}
+onMouseEnter={(e)=>{
+e.currentTarget.style.transform='translateY(-6px)';
+e.currentTarget.style.boxShadow='0 28px 60px rgba(0,0,0,.45)';
+e.currentTarget.style.borderColor=`${BRAND.blue}40`;
+}}
+onMouseLeave={(e)=>{
+e.currentTarget.style.transform='translateY(0)';
+e.currentTarget.style.boxShadow='0 20px 50px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05)';
+e.currentTarget.style.borderColor=BRAND.border;
+}}
+>
         <div style={styles.cardHeader}>Weekly trend — hours logged per day</div>
         {hasWeekly ? (
           <>
             <ResponsiveContainer width="100%" height={180}>
               <LineChart data={chartWeekly} margin={{ top:8, right:8, left:-20, bottom:0 }}>
-                <CartesianGrid strokeDasharray="4 4" stroke={COLORS.grid} vertical={false} />
+                <CartesianGrid strokeDasharray="4 4" stroke={BRAND.border} vertical={false} />
                 <XAxis dataKey="day" tick={axisTickStyle} axisLine={false} tickLine={false}/>
                 <YAxis tick={axisTickStyle} axisLine={false} tickLine={false}/>
-                <Tooltip contentStyle={tooltipStyle} cursor={{ stroke: 'rgba(255,255,255,.15)' }}/>
-                <Line type="monotone" dataKey="hours" stroke={COLORS.blue} strokeWidth={4} dot={{
-fill:COLORS.blue,
+                <Tooltip contentStyle={tooltipStyle} cursor={{ stroke: 'rgba(245,247,250,.15)' }}/>
+                <Line type="monotone" dataKey="hours" stroke={BRAND.blue} strokeWidth={4} dot={{
+fill:BRAND.blue,
 r:6,
-stroke:"#fff",
+stroke:BRAND.white,
 strokeWidth:2
 }} activeDot={{ r: 6 }}/>
-                <Line type="monotone" dataKey="users" stroke={COLORS.purple} strokeWidth={4} dot={{
-fill:COLORS.blue,
+                <Line type="monotone" dataKey="users" stroke={BRAND.yellow} strokeWidth={4} dot={{
+fill:BRAND.yellow,
 r:6,
-stroke:"#fff",
+stroke:BRAND.white,
 strokeWidth:2
 }} activeDot={{ r: 6 }}/>
               </LineChart>
@@ -359,11 +387,11 @@ strokeWidth:2
 gap:28,
 marginTop:20,
 justifyContent:'center', }}>
-              <span style={{ fontSize:12, color: COLORS.textMuted, display:'flex', alignItems:'center', gap:6 }}>
-                <span style={{ width:10, height:10, borderRadius:'50%', background: COLORS.blue, display:'inline-block' }}/> Hours
+              <span style={{ fontSize:12, color: BRAND.muted, display:'flex', alignItems:'center', gap:6 }}>
+                <span style={{ width:10, height:10, borderRadius:'50%', background: BRAND.blue, display:'inline-block' }}/> Hours
               </span>
-              <span style={{ fontSize:12, color: COLORS.textMuted, display:'flex', alignItems:'center', gap:6 }}>
-                <span style={{ width:10, height:10, borderRadius:'50%', background: COLORS.purple, display:'inline-block' }}/> Active users
+              <span style={{ fontSize:12, color: BRAND.muted, display:'flex', alignItems:'center', gap:6 }}>
+                <span style={{ width:10, height:10, borderRadius:'50%', background: BRAND.yellow, display:'inline-block' }}/> Active users
               </span>
             </div>
           </>
