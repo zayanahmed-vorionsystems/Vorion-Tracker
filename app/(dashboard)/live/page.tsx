@@ -24,6 +24,7 @@ interface AgentCard {
 
 const STREAM_CONNECT_TIMEOUT_MS = 15000;
 const CHANNEL_SUBSCRIBE_TIMEOUT_MS = 10000;
+const ADMIN_ID_STORAGE_KEY = 'worktrack-live-admin-id';
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.relay.metered.ca:80' },
@@ -130,6 +131,22 @@ export default function LiveMonitorPage() {
   const router = useRouter();
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const channelRef = useRef<any>(null);
+  // Persist a stable admin presence key across refresh / Fast Refresh cycles.
+  const initialAdminId = (() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const saved = window.localStorage.getItem(ADMIN_ID_STORAGE_KEY);
+        if (saved) return saved;
+        const generated = `admin-${Math.random().toString(36).slice(2, 10)}`;
+        window.localStorage.setItem(ADMIN_ID_STORAGE_KEY, generated);
+        return generated;
+      }
+    } catch {
+      // ignore localStorage failures
+    }
+    return `admin-${Math.random().toString(36).slice(2, 10)}`;
+  })();
+  const adminIdRef = useRef<string>(initialAdminId);
   // Tracks the promise that resolves once the current channel is SUBSCRIBED.
   // We must await this before calling channel.send(), otherwise realtime-js
   // silently falls back to REST delivery, which the agent never receives.
@@ -148,7 +165,6 @@ export default function LiveMonitorPage() {
   // flight) from both racing to tear down / recreate the channel.
   const channelSetupInFlightRef = useRef<Promise<{ channel: any; ready: Promise<void> }> | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
-  const adminIdRef = useRef<string>('');
   const streamRequestIdRef = useRef<string | null>(null);
   const activeEmployeeRef = useRef<string | null>(null);
   const selectedEmployeeRef = useRef<Employee | null>(null);
@@ -581,18 +597,20 @@ export default function LiveMonitorPage() {
       // Find and remove any such orphan by topic before creating anew.
       // ───────────────────────────────────────────────────────────────────
       const topic = `live-${employeeId}`;
-      const orphan = supabaseClient.getChannels().find((ch: any) =>
+      const orphans = supabaseClient.getChannels().filter((ch: any) =>
         ch.topic === `realtime:${topic}` || ch.topic === topic
       );
-      if (orphan) {
-        console.warn('[live-monitor] removing orphaned channel before recreating', topic);
-        markChannelForCleanup(orphan);
-        try {
-          await supabaseClient.removeChannel(orphan);
-        } catch (err) {
-          console.warn('[live-monitor] error removing orphaned channel', err);
-        } finally {
-          unmarkChannelCleanup(orphan);
+      if (orphans.length > 0) {
+        console.warn('[live-monitor] removing orphaned channels before recreating', { topic, count: orphans.length });
+        for (const orphan of orphans) {
+          markChannelForCleanup(orphan);
+          try {
+            await supabaseClient.removeChannel(orphan);
+          } catch (err) {
+            console.warn('[live-monitor] error removing orphaned channel', err);
+          } finally {
+            unmarkChannelCleanup(orphan);
+          }
         }
       }
 
@@ -615,7 +633,7 @@ export default function LiveMonitorPage() {
           console.log('[live-monitor] presence sync', { employeeId, state });
           const presentAgents = Object.values(state as Record<string, any[]>).flat();
           console.log('[live-monitor] presentAgents', { employeeId, count: presentAgents.length, sample: presentAgents.slice(0,5) });
-          const online = presentAgents.some((entry: any) => entry?.online);
+          const online = presentAgents.some((entry: any) => entry?.online && entry?.role !== 'admin');
           
           // The FIRST presence sync right after subscribing can legitimately
           // come back empty even though the agent is online — there's a race

@@ -29,7 +29,7 @@ import { syncProxyBlock, removeProxyBlock } from './websiteBlock';
 
 // ─── Config ────────────────────────────────────────────────────────────────
 const isDev      = !app.isPackaged;
-const SERVER_URL = process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || (isDev ? 'http://127.0.0.1:3000' : 'https://vorion-tracker-rosy.vercel.app/');
+const SERVER_URL = process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || (isDev ? 'http://127.0.0.1:3000' : 'https://tracker.vorionsystems.com/');
 
 // ─── Persistent store ──────────────────────────────────────────────────────
 const DATA_DIR   = app.getPath('userData');
@@ -136,6 +136,9 @@ function apiRequest(method:string, path:string, body?:any, isFormData=false): Pr
           return reject(new HttpError(`Request failed ${status}: ${raw}`, status));
         }
       });
+    });
+    req.setTimeout(15000, () => {
+      req.destroy(new Error('Request timed out'));
     });
     req.on('error', reject);
     if (data) req.write(data);
@@ -719,11 +722,14 @@ ipcMain.handle('login', async (_e, email:string, password:string) => {
   }
 });
 ipcMain.handle('logout', async () => {
-  if (token) {
-    try { await endSession(); await sessionAction('logout'); }
-    catch (err:any) { console.error('Logout action failed:', err?.message || err); }
-  }
   await stopTracking();
+
+  if (token) {
+    void sessionAction('logout').catch((err:any) => {
+      console.error('Logout action failed:', err?.message || err);
+    });
+  }
+
   token=''; userName=''; employeeId='';
   set('token',''); set('userName',''); set('employeeId','');
   status='offline';
@@ -757,7 +763,15 @@ ipcMain.handle('end-break', async () => {
   broadcastStatus();
   return { ok: true };
 });
-ipcMain.handle('checkout', async () => { await endSession(); await stopTracking(); });
+ipcMain.handle('checkout', async () => {
+  if (tracking) {
+    await stopTracking();
+    return { ok: true };
+  }
+
+  void endSession();
+  return { ok: true };
+});
 app.commandLine.appendSwitch('disable-features', 'DesktopCaptureUseDxgi');
 // ─── Boot ────────────────────────────────────────────────────────────────────
 app.whenReady().then(async ()=>{
@@ -771,6 +785,15 @@ app.whenReady().then(async ()=>{
   tray.on('double-click',()=>mainWindow?.show());
   updateTray();
   mainWindow?.show();
+  token = '';
+  userName = '';
+  employeeId = '';
+  set('token', '');
+  set('userName', '');
+  set('employeeId', '');
+  status = 'offline';
+  liveWatchStarted = false;
+  mainWindow?.webContents.send('status-changed', { status: 'offline' });
   if (token) {
     try {
       const nextEmployeeId = getEmployeeIdFromUser(get('user') || null);
