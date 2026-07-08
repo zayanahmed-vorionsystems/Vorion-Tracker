@@ -134,6 +134,9 @@ export default function LiveMonitorPage() {
   // We must await this before calling channel.send(), otherwise realtime-js
   // silently falls back to REST delivery, which the agent never receives.
   const channelReadyRef = useRef<Promise<void> | null>(null);
+  // Tracks channels that are being intentionally removed so we can ignore
+  // their CLOSED status without reporting a false subscribe failure.
+  const channelCleanupRef = useRef<Set<any>>(new Set());
   // Explicit employeeId the current channelRef/channelReadyRef belong to.
   // We deliberately do NOT parse channel.topic strings to figure this out —
   // that was fragile and caused a real bug where .on() got called on an
@@ -249,7 +252,14 @@ export default function LiveMonitorPage() {
   useEffect(() => {
     return () => {
       if (channelRef.current) {
-        try { supabaseClient.removeChannel(channelRef.current); } catch (err) { console.warn('[live-monitor] removeChannel error on unmount', err); }
+        markChannelForCleanup(channelRef.current);
+        try {
+          supabaseClient.removeChannel(channelRef.current);
+        } catch (err) {
+          console.warn('[live-monitor] removeChannel error on unmount', err);
+        } finally {
+          unmarkChannelCleanup(channelRef.current);
+        }
         channelRef.current = null;
         channelReadyRef.current = null;
         channelEmployeeIdRef.current = null;
@@ -276,6 +286,14 @@ export default function LiveMonitorPage() {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
+  }
+
+  function markChannelForCleanup(channel: any) {
+    channelCleanupRef.current.add(channel);
+  }
+
+  function unmarkChannelCleanup(channel: any) {
+    channelCleanupRef.current.delete(channel);
   }
 
   function hasLiveRemoteStream() {
@@ -524,10 +542,13 @@ export default function LiveMonitorPage() {
 
     // If a previous channel exists but is no longer usable, tear it down before creating a new one.
     if (channelRef.current && channelEmployeeIdRef.current !== employeeId) {
+      markChannelForCleanup(channelRef.current);
       try {
         await supabaseClient.removeChannel(channelRef.current);
       } catch (err) {
         console.warn('[live-monitor] error removing previous channel before reuse', err);
+      } finally {
+        unmarkChannelCleanup(channelRef.current);
       }
       channelRef.current = null;
       channelReadyRef.current = null;
@@ -565,10 +586,13 @@ export default function LiveMonitorPage() {
       );
       if (orphan) {
         console.warn('[live-monitor] removing orphaned channel before recreating', topic);
+        markChannelForCleanup(orphan);
         try {
           await supabaseClient.removeChannel(orphan);
         } catch (err) {
           console.warn('[live-monitor] error removing orphaned channel', err);
+        } finally {
+          unmarkChannelCleanup(orphan);
         }
       }
 
@@ -708,35 +732,44 @@ export default function LiveMonitorPage() {
           reject(new Error('Channel subscribe timed out'));
         }, CHANNEL_SUBSCRIBE_TIMEOUT_MS);
         channel.subscribe((status: string, err?: Error) => {
-          console.log('[live-monitor] channel status:', status, err ? `error: ${err.message}` : '');
-          if (status === 'SUBSCRIBED') {
-            clearTimeout(timeout);
-            void channel.track({ online: true, adminId: adminIdRef.current, role: user?.role || 'admin' });
-            resolve();
-          }
-
-          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-            clearTimeout(timeout);
-            const errMsg = `Channel subscribe failed: ${status}${err ? ` (${err.message})` : ''}`;
-            console.error('[live-monitor][ERR]', errMsg);
-            // If the channel that failed is the one we're tracking, tear it down
-            // and attempt a background reconnect after a short delay. This helps
-            // recover from transient socket drops without requiring a page reload.
-            if (channelRef.current === channel) {
-              try {
-                supabaseClient.removeChannel(channel).catch(() => {});
-              } catch (_e) {}
-              channelRef.current = null;
-              channelReadyRef.current = null;
-              channelEmployeeIdRef.current = null;
-              setTimeout(() => {
-                // best-effort re-establish
-                void ensureChannel(employeeId).then(() => {}).catch(() => {});
-              }, 2500);
+            if (channelRef.current !== channel) {
+              console.log('[live-monitor] ignoring status for stale channel', status, { topic: channel.topic });
+              return;
             }
-            reject(new Error(errMsg));
-          }
-        });
+
+            console.log('[live-monitor] channel status:', status, err ? `error: ${err.message}` : '');
+            if (status === 'SUBSCRIBED') {
+              clearTimeout(timeout);
+              void channel.track({ online: true, adminId: adminIdRef.current, role: user?.role || 'admin' });
+              resolve();
+              return;
+            }
+
+            if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+              clearTimeout(timeout);
+              if (channelCleanupRef.current.has(channel)) {
+                console.log('[live-monitor] channel closed during intentional cleanup, suppressing error', { status, topic: channel.topic });
+                return;
+              }
+
+              const errMsg = err?.message || `Channel ${status}`;
+              if (channelRef.current === channel) {
+                try {
+                  supabaseClient.removeChannel(channel).catch(() => {});
+                } catch (_e) {}
+                channelRef.current = null;
+                channelReadyRef.current = null;
+                channelEmployeeIdRef.current = null;
+                setTimeout(() => {
+                  // best-effort re-establish
+                  void ensureChannel(employeeId).then(() => {}).catch(() => {});
+                }, 2500);
+              }
+
+              reject(new Error(errMsg));
+              return;
+            }
+          });
       });
 
       channelRef.current = channel;
