@@ -1,25 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-console.log('[AGENT][4] preload loaded');
+console.log('[AGENT] live publisher preload loaded');
 
-contextBridge.exposeInMainWorld('liveWatch', {
-  onStartCapture: (cb: (data: { sourceId: string; employeeId?: string; adminId: string; offer?: any; requestId?: string }) => void) =>
-    ipcRenderer.on('start-capture', (_event, data) => cb(data)),
-
-  onStopCapture: (cb: (data?: { adminId?: string }) => void) =>
-    ipcRenderer.on('stop-capture', (_event, data) => cb(data)),
-
-  onRemoteAnswer: (cb: (data: { adminId: string; sdp: any; requestId?: string }) => void) =>
-    ipcRenderer.on('remote-answer', (_event, data) => cb(data)),
-
-  onRemoteIceCandidate: (cb: (data: { adminId: string; candidate: any; requestId?: string }) => void) =>
-    ipcRenderer.on('remote-ice-candidate', (_event, data) => cb(data)),
-
-  sendAnswer: (adminId: string, sdp: any, requestId?: string) =>
-    ipcRenderer.send('live-watch:answer', { adminId, sdp, requestId }),
-
-  sendIceCandidate: (adminId: string, candidate: any, requestId?: string) =>
-    ipcRenderer.send('live-watch:ice-candidate', { adminId, candidate, requestId }),
-
-  sendReady: () => ipcRenderer.send('live-watch:ready'),
+contextBridge.exposeInMainWorld('livePublisher', {
+  onStart: (
+    cb: (data: { sourceId: string; employeeId: string; sessionId: string; authToken: string; serverUrl: string }) => void,
+  ) => ipcRenderer.on('livekit:start', (_event, data) => cb(data)),
+  onStop: (cb: () => void) => ipcRenderer.on('livekit:stop', () => cb()),
+  sendReady: () => ipcRenderer.send('livekit:ready'),
+  log: (payload: Record<string, unknown>) => ipcRenderer.send('livekit:log', payload),
 });

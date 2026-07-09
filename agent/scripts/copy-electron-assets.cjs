@@ -4,9 +4,9 @@ const path = require('path');
 
 const projectRoot = path.resolve(__dirname, '..');
 const srcDir = path.join(projectRoot, 'src');
-const distDir = path.join(projectRoot, 'dist');
+const buildDir = path.join(projectRoot, 'build');
 
-fs.mkdirSync(distDir, { recursive: true });
+fs.mkdirSync(buildDir, { recursive: true });
 
 const copiedFiles = [];
 
@@ -25,7 +25,7 @@ function walk(dir) {
     if (['.ts', '.tsx'].includes(ext)) continue;
 
     const relativePath = path.relative(srcDir, fullPath);
-    const targetPath = path.join(distDir, relativePath);
+    const targetPath = path.join(buildDir, relativePath);
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     fs.copyFileSync(fullPath, targetPath);
     copiedFiles.push(relativePath);
@@ -34,4 +34,4 @@ function walk(dir) {
 
 walk(srcDir);
 
-console.log(`[copy-electron-assets] copied ${copiedFiles.length} static file(s) to ${distDir}`);
+console.log(`[copy-electron-assets] copied ${copiedFiles.length} static file(s) to ${buildDir}`);

@@ -52,6 +52,21 @@ function recordFailedLogin(key: string, now: number) {
   return nextState;
 }
 
+function isAuthProviderFailure(authError: any) {
+  const message = String(authError?.message || '').toLowerCase();
+  const name = String(authError?.name || '').toLowerCase();
+  const status = Number(authError?.status || 0);
+
+  return (
+    message.includes('fetch failed') ||
+    message.includes('getaddrinfo') ||
+    message.includes('enotfound') ||
+    name.includes('retryablefetch') ||
+    name.includes('fetcherror') ||
+    status >= 500
+  );
+}
+
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
@@ -110,11 +125,28 @@ export async function POST(req: NextRequest) {
     return err('Too many login attempts. Please try again later.', 429);
   }
 
-  // 1. Verify credentials via Supabase Auth
-  const { data: authData, error: authError } =
-    await admin.auth.signInWithPassword({ email, password });
+  let authData;
+  let authError;
+  try {
+    const result = await admin.auth.signInWithPassword({ email, password });
+    authData = result.data;
+    authError = result.error;
+  } catch (error: any) {
+    console.error('POST /api/auth upstream auth error:', error?.message || error);
+    return err('Service unavailable: auth provider unreachable', 503);
+  }
 
-  if (authError || !authData?.user) {
+  if (authError) {
+    if (isAuthProviderFailure(authError)) {
+      console.error('POST /api/auth upstream auth error:', authError);
+      return err('Service unavailable: auth provider unreachable', 503);
+    }
+
+    recordFailedLogin(loginKey, now);
+    return err('Invalid credentials', 401);
+  }
+
+  if (!authData?.user) {
     recordFailedLogin(loginKey, now);
     return err('Invalid credentials', 401);
   }

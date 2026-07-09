@@ -21,6 +21,18 @@ function buildPacContent(domains: string[]): string {
   return `function FindProxyForURL(url, host) {
   var blocked = ${domainList};
   host = host.toLowerCase().replace(/^www\\./, '');
+  if (isPlainHostName(host)) return "DIRECT";
+  if (dnsDomainIs(host, "localhost")) return "DIRECT";
+  if (shExpMatch(host, "127.*")) return "DIRECT";
+  if (shExpMatch(host, "10.*")) return "DIRECT";
+  if (shExpMatch(host, "192.168.*")) return "DIRECT";
+  if (shExpMatch(host, "172.16.*")) return "DIRECT";
+  if (shExpMatch(host, "172.17.*")) return "DIRECT";
+  if (shExpMatch(host, "172.18.*")) return "DIRECT";
+  if (shExpMatch(host, "172.19.*")) return "DIRECT";
+  if (shExpMatch(host, "172.2?.*")) return "DIRECT";
+  if (shExpMatch(host, "172.30.*")) return "DIRECT";
+  if (shExpMatch(host, "172.31.*")) return "DIRECT";
   for (var i = 0; i < blocked.length; i++) {
     if (host === blocked[i] || host.indexOf('.' + blocked[i]) !== -1) {
       return "PROXY 127.0.0.1:${DEAD_PORT}";
@@ -106,6 +118,10 @@ public class WI { [DllImport("wininet.dll")] public static extern bool InternetS
 function killChromeOnce(): Promise<void> {
   return new Promise((resolve) => {
     if (process.platform !== 'win32') return resolve();
+    if (process.env.WORKTRACK_ENABLE_CHROME_RESTART !== 'true') {
+      console.log('[SECURITY] Skipping automatic Chrome restart; proxy rules will fully apply on the next browser restart');
+      return resolve();
+    }
     if (proxyAppliedOnce) return resolve(); // only do this once per session
     proxyAppliedOnce = true;
 

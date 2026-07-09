@@ -1,24 +1,106 @@
 // agent/src/main.ts  — Electron main process
 import * as dotenv from 'dotenv';
+import fs from 'fs';
 import path from 'path';
-// Load agent .env as early as possible so service keys are available
-dotenv.config({ path: path.join(__dirname, '..', '.env') });
+
+function getAncestorEnvCandidates(baseDir: string) {
+  if (!baseDir) return [];
+
+  const candidates: string[] = [];
+  let currentDir = path.resolve(baseDir);
+
+  for (let depth = 0; depth < 4; depth += 1) {
+    candidates.push(path.join(currentDir, '.env.local'));
+    candidates.push(path.join(currentDir, '.env'));
+
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir) break;
+    currentDir = parentDir;
+  }
+
+  return candidates;
+}
+
+function loadAgentEnv() {
+  const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR || '';
+  const executableDir = process.execPath ? path.dirname(process.execPath) : '';
+  const cwd = process.cwd();
+  const candidatePaths = [
+    ...getAncestorEnvCandidates(portableExecutableDir),
+    ...getAncestorEnvCandidates(executableDir),
+    ...getAncestorEnvCandidates(cwd),
+    path.resolve(__dirname, '..', '.env.local'),
+    path.resolve(__dirname, '..', '.env'),
+    path.resolve(__dirname, '..', '..', '.env.local'),
+    path.resolve(__dirname, '..', '..', '.env'),
+  ].filter((candidatePath, index, allPaths) => Boolean(candidatePath) && allPaths.indexOf(candidatePath) === index);
+
+  for (const candidatePath of candidatePaths) {
+    if (!fs.existsSync(candidatePath)) continue;
+    dotenv.config({ path: candidatePath });
+  }
+}
+
+function setupFileLogging() {
+  try {
+    const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR || '';
+    const executableDir = process.execPath ? path.dirname(process.execPath) : '';
+    const cwd = process.cwd();
+    const logDir = portableExecutableDir || executableDir || cwd;
+    if (!logDir) return;
+
+    const logPath = path.join(logDir, 'agent-debug.log');
+    const append = (level: 'LOG' | 'WARN' | 'ERROR', args: unknown[]) => {
+      try {
+        const line = `[${new Date().toISOString()}] [${level}] ${args.map((arg) => {
+          if (arg instanceof Error) return arg.stack || arg.message;
+          if (typeof arg === 'string') return arg;
+          try { return JSON.stringify(arg); } catch { return String(arg); }
+        }).join(' ')}\n`;
+        fs.appendFileSync(logPath, line, 'utf8');
+      } catch {
+        // Keep normal console behavior if file logging fails.
+      }
+    };
+
+    const originalLog = console.log.bind(console);
+    const originalWarn = console.warn.bind(console);
+    const originalError = console.error.bind(console);
+
+    console.log = (...args: unknown[]) => {
+      append('LOG', args);
+      originalLog(...args);
+    };
+    console.warn = (...args: unknown[]) => {
+      append('WARN', args);
+      originalWarn(...args);
+    };
+    console.error = (...args: unknown[]) => {
+      append('ERROR', args);
+      originalError(...args);
+    };
+
+    console.log('[AGENT] file logging enabled', { logPath });
+  } catch {
+    // Ignore logging bootstrap failures.
+  }
+}
+
+loadAgentEnv();
+setupFileLogging();
 console.log('[AGENT] env load check', {
-  SUPABASE_URL: Boolean(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL),
-  SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+  SERVER_URL: Boolean(process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL),
+  LIVEKIT_URL: Boolean(process.env.LIVEKIT_URL),
 });
 import { app } from 'electron';
 import {
    BrowserWindow, Tray, Menu, nativeImage,
   ipcMain, powerMonitor, desktopCapturer, screen, shell, dialog
 } from 'electron';
-dotenv.config({ path: path.join(__dirname, '..', '.env') });
-import fs     from 'fs';
 import os     from 'os';
 import https  from 'https';
 import http   from 'http';
 // FIX: teardownLiveWatch must be imported from './live-watch' — the real
-// implementation there calls supabaseClient.removeChannel(liveChannel).
 // A local no-op function with the same name used to be declared further
 // down in this file, which shadowed this import and meant the real channel
 // was never torn down on stopTracking()/logout, leaving an orphaned,
@@ -93,8 +175,6 @@ const recentlyReportedDomains = new Map<string, number>();
 set('agentId', agentId);
 
 // ─── Live streaming state (WebRTC) ──────────────────────────────────────────
-let streamWindow: BrowserWindow | null = null;
-const activeWatchers = new Set<string>();
 
 // ─── Single instance lock ───────────────────────────────────────────────────
 if (!app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
@@ -168,21 +248,59 @@ async function startSession() {
   try {
     const response = await sessionAction('start');
     sessionId = response.sessionId || sessionId;
+    await ensureLiveWatchRunning();
   } catch (err:any) {
     console.error('Failed to start session:', err?.message || err);
   }
 }
 
+async function ensureLiveWatchRunning() {
+  if (!tracking || !token || !employeeId || !sessionId) return;
+
+  try {
+    await setupLiveWatch({
+      employeeId,
+      sessionId,
+      authToken: token,
+      serverUrl: SERVER_URL,
+    });
+  } catch (err:any) {
+    console.error('Failed to start live watch:', err?.message || err);
+  }
+}
+
 async function endSession() {
   if (!token) return;
+  const sessionIdToClose = sessionId;
   try {
-    const payload = sessionId ? { sessionId } : {};
+    const payload = sessionIdToClose ? { sessionId: sessionIdToClose } : {};
     await sessionAction('checkout', payload);
   } catch (err:any) {
     console.error('Failed to end session:', err?.message || err);
   } finally {
+    await teardownLiveWatch({
+      authToken: token,
+      serverUrl: SERVER_URL,
+      sessionId: sessionIdToClose,
+      stopRoom: true,
+    });
     sessionId = '';
   }
+}
+
+async function getActiveWindowSnapshot() {
+  try {
+    const activeWinModule = require('active-win');
+    return await activeWinModule.default();
+  } catch (err:any) {
+    console.warn('[AGENT] active-win unavailable, foreground app detection disabled', err?.message || err);
+    return null;
+  }
+}
+
+async function getActiveAppName() {
+  const activeWindow = await getActiveWindowSnapshot();
+  return activeWindow?.owner?.name || activeWindow?.title?.split(' - ')[0] || 'Unknown';
 }
 
 async function uploadScreenshot(pngBuf: Buffer, activeApp:string, actPct:number, capturedAt:string) {
@@ -351,8 +469,8 @@ function normalizeProcessName(name:string) {
 async function scanBlockedWebsites() {
   if (!token || !cachedPolicy || !cachedPolicy.blockWebsites || !cachedBlockedWebsites.length) return;
   try {
-    const { default: activeWin } = await import('active-win');
-    const win       = await activeWin();
+    const win = await getActiveWindowSnapshot();
+    if (!win) return;
     const ownerName = (win?.owner?.name || '').toLowerCase();
     const title     = win?.title || '';
     console.log('[SECURITY] [DEBUG] owner.name=', JSON.stringify(win?.owner?.name), 'title=', JSON.stringify(title));
@@ -439,68 +557,6 @@ async function scanBlockedApps() {
 // work, because RTCPeerConnection / getUserMedia only exist in a renderer
 // (Chromium) context, not in this Node.js main process.
 
-function ensureStreamWindow(): BrowserWindow {
-  if (streamWindow && !streamWindow.isDestroyed()) return streamWindow;
-
-  streamWindow = new BrowserWindow({
-    show: false,
-    width: 400,
-    height: 300,
-    webPreferences: {
-      preload: path.join(__dirname, 'streamPreload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  const streamHtml = isDev
-    ? path.join(__dirname, '../assets/stream/stream.html')
-    : path.join(process.resourcesPath, 'assets', 'stream', 'stream.html');
-
-  streamWindow.loadFile(streamHtml).catch((err) => console.error('Failed to load stream window:', err));
-  streamWindow.webContents.on('render-process-gone', (_e, details) => {
-    console.error('Stream window renderer crashed:', details);
-    streamWindow = null;
-  });
-
-  return streamWindow;
-}
-
-async function handleWatchRequest(watcherId: string) {
-  try {
-    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1, height: 1 } });
-    if (!sources.length) { console.error('No screen sources available for streaming'); return; }
-    const sourceId = sources[0].id;
-
-    const win = ensureStreamWindow();
-    activeWatchers.add(watcherId);
-
-    const send = () => win.webContents.send('stream:start', { watcherId, sourceId });
-    if (win.webContents.isLoading()) win.webContents.once('did-finish-load', send);
-    else send();
-  } catch (err: any) {
-    console.error('Failed to start stream for watcher', watcherId, err?.message || err);
-  }
-}
-
-function handleStopWatching(watcherId: string) {
-  activeWatchers.delete(watcherId);
-  streamWindow?.webContents.send('stream:stop', { watcherId });
-
-  if (activeWatchers.size === 0 && streamWindow && !streamWindow.isDestroyed()) {
-    // No one is watching anymore — close the hidden capture window to free resources.
-    streamWindow.close();
-    streamWindow = null;
-  }
-}
-
-function closeAllStreams() {
-  activeWatchers.forEach((watcherId) => streamWindow?.webContents.send('stream:stop', { watcherId }));
-  activeWatchers.clear();
-  if (streamWindow && !streamWindow.isDestroyed()) streamWindow.close();
-  streamWindow = null;
-}
-
 // ─────────────────────────────────────────────────────────────────────────
 // FIX: previously `liveWatchStarted = true` was set unconditionally, before
 // checking whether `employeeId` was actually populated yet. Because
@@ -517,18 +573,6 @@ function closeAllStreams() {
 // safely retried later (e.g. once boot-time identity restore finishes, or
 // the next time startTracking() runs).
 // ─────────────────────────────────────────────────────────────────────────
-let liveWatchStarted = false;
-
-async function initializeSocket() {
-  if (liveWatchStarted) return;
-  if (!employeeId) {
-    console.warn('[AGENT] initializeSocket called before employeeId was available — will retry once identity is known');
-    return;
-  }
-  liveWatchStarted = true;
-  console.log('[AGENT] setupLiveWatch called from main.ts', { employeeId });
-  setupLiveWatch(employeeId);
-}
 
 console.log('WorkTrack agent using SERVER_URL=', SERVER_URL);
 
@@ -541,6 +585,7 @@ async function sendHeartbeat() {
   if (!token) return;
   try {
     await apiRequest('POST', '/api/heartbeat', { currentApp: lastActiveApp, activityPct: lastActivityPct, status, timestamp: new Date().toISOString() });
+    void ensureLiveWatchRunning();
   } catch (err:any) { console.error('Heartbeat failed:', err?.message || err); }
 }
 
@@ -559,8 +604,7 @@ async function captureAndUpload() {
     const pngBuf = resizedThumbnail.toPNG();
     const screenshotBase64 = pngBuf.toString('base64');
     const capturedAt       = new Date().toISOString();
-    let activeApp = 'Unknown';
-    try { const { default: activeWin } = await import('active-win'); const w = await activeWin(); activeApp = w?.owner?.name || w?.title?.split(' — ')[0] || 'Unknown'; } catch {}
+    const activeApp = await getActiveAppName();
     const idleSec = powerMonitor.getSystemIdleTime();
     const actPct  = Math.max(0, Math.min(100, Math.round(100 - (idleSec / 60) * 100)));
     lastActiveApp   = activeApp;
@@ -578,8 +622,8 @@ async function startTracking() {
   tracking = true;
   status = 'active';
 
-  void initializeSocket();
-  void startSession();
+  await startSession();
+  await ensureLiveWatchRunning();
 
   ssInterval        = setInterval(captureAndUpload, captureIntervalSec * 1000);
   idleInterval      = setInterval(watchIdle, 2000);
@@ -605,7 +649,7 @@ async function stopTracking() {
   tracking = false;
   status = 'offline';
 
-  void endSession();
+  await endSession();
 
   if (ssInterval) clearInterval(ssInterval);
   if (idleInterval) clearInterval(idleInterval);
@@ -613,9 +657,6 @@ async function stopTracking() {
   if (policyInterval) clearInterval(policyInterval);
   if (scanInterval) clearInterval(scanInterval);
   if (policySyncInterval) clearInterval(policySyncInterval);
-
-  teardownLiveWatch();
-  closeAllStreams();
 
   updateTray();
 
@@ -709,10 +750,6 @@ ipcMain.handle('login', async (_e, email:string, password:string) => {
       console.warn('[AUTH] Login response did not contain an employeeId', { responseKeys: Object.keys(res || {}) });
     }
 
-    if (employeeId) {
-      setupLiveWatch(employeeId);
-      liveWatchStarted = true; // keep initializeSocket()'s latch in sync with this direct call
-    }
     status = 'offline';
     mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
     return { ok:true, user:res.user };
@@ -733,7 +770,6 @@ ipcMain.handle('logout', async () => {
   token=''; userName=''; employeeId='';
   set('token',''); set('userName',''); set('employeeId','');
   status='offline';
-  liveWatchStarted = false;     // safety net
   mainWindow?.webContents.send('status-changed',{ status:'offline' });
   mainWindow?.show();
   return { ok:true };
@@ -785,24 +821,16 @@ app.whenReady().then(async ()=>{
   tray.on('double-click',()=>mainWindow?.show());
   updateTray();
   mainWindow?.show();
-  token = '';
-  userName = '';
-  employeeId = '';
-  set('token', '');
-  set('userName', '');
-  set('employeeId', '');
   status = 'offline';
-  liveWatchStarted = false;
-  mainWindow?.webContents.send('status-changed', { status: 'offline' });
-  if (token) {
+  const storedToken = get('token') || '';
+  const storedUserName = get('userName') || '';
+  const storedEmployeeId = get('employeeId') || '';
+  if (storedToken) {
     try {
-      const nextEmployeeId = getEmployeeIdFromUser(get('user') || null);
-      const nextUserName = get('userName') || '';
-      persistSessionIdentity(token, nextUserName, nextEmployeeId);
+      persistSessionIdentity(storedToken, storedUserName, storedEmployeeId);
       console.log('[AUTH] restored session identity from local store', { employeeId, userName, hasToken: Boolean(token) });
       status = 'offline';
       mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
-      void initializeSocket();
     } catch {
       console.log('Stored token invalid/expired — clearing, user must log in again');
       token=''; userName=''; employeeId='';
@@ -819,13 +847,14 @@ app.whenReady().then(async ()=>{
         persistSessionIdentity(token, nextUserName, nextEmployeeId);
         console.log('[AUTH] refreshed session identity', { employeeId, userName, hasToken: Boolean(token) });
         mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
-        void initializeSocket();
       } catch {
         console.log('[AUTH] background auth refresh failed — keeping cached identity');
       }
     })();
+  } else {
+    mainWindow?.webContents.send('status-changed', { status: 'offline' });
   }
 });
 
 app.on('window-all-closed',()=>{ /* keep alive in tray */ });
-app.on('before-quit',()=>{ tracking && stopTracking(); closeAllStreams(); removeProxyBlock(); });
+app.on('before-quit',()=>{ tracking && stopTracking(); void teardownLiveWatch(); removeProxyBlock(); });

@@ -1,138 +1,167 @@
+import { LocalVideoTrack, Room, RoomEvent, Track } from 'livekit-client';
+
 const globalScope = window as Window & typeof globalThis & {
   __worktrackCaptureRendererInitialized?: boolean;
-  __worktrackCaptureRendererLiveWatch?: any;
+  __worktrackLivePublisher?: Window['livePublisher'];
 };
+
+type PublisherStartPayload = {
+  sourceId: string;
+  employeeId: string;
+  sessionId: string;
+  authToken: string;
+  serverUrl: string;
+};
+
+let room: Room | null = null;
+let localTrack: LocalVideoTrack | null = null;
+let mediaStream: MediaStream | null = null;
+let currentSessionKey = '';
+let desiredConfig: PublisherStartPayload | null = null;
+
+function log(payload: Record<string, unknown>) {
+  try {
+    globalScope.__worktrackLivePublisher?.log(payload);
+  } catch {
+    console.log('[AGENT][LIVEKIT]', payload);
+  }
+}
+
+async function stopPublishing() {
+  desiredConfig = null;
+  currentSessionKey = '';
+
+  if (room && localTrack) {
+    try {
+      await room.localParticipant.unpublishTrack(localTrack);
+    } catch (error) {
+      console.warn('[AGENT][LIVEKIT] failed to unpublish track', error);
+    }
+  }
+
+  localTrack?.stop();
+  mediaStream?.getTracks().forEach((track) => track.stop());
+  localTrack = null;
+  mediaStream = null;
+
+  if (room) {
+    room.disconnect();
+    room = null;
+  }
+}
+
+async function fetchPublisherToken(config: PublisherStartPayload) {
+  const response = await fetch(new URL('/api/live/publisher-token', config.serverUrl).toString(), {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.authToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ sessionId: config.sessionId }),
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload?.error || `Failed to fetch publisher token (${response.status})`);
+  }
+
+  return payload as {
+    token: string;
+    livekitUrl: string;
+    roomName: string;
+  };
+}
+
+async function createScreenTrack(sourceId: string) {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      mandatory: {
+        chromeMediaSource: 'desktop',
+        chromeMediaSourceId: sourceId,
+        maxFrameRate: 15,
+        minWidth: 1280,
+        maxWidth: 1920,
+        minHeight: 720,
+        maxHeight: 1080,
+      },
+    } as any,
+  } as any);
+
+  const track = stream.getVideoTracks()[0];
+  if (!track) {
+    throw new Error('Desktop capture track was not created');
+  }
+
+  const liveTrack = new LocalVideoTrack(track, undefined, true);
+  liveTrack.source = Track.Source.ScreenShare;
+
+  mediaStream = stream;
+  localTrack = liveTrack;
+  return liveTrack;
+}
+
+async function startPublishing(config: PublisherStartPayload) {
+  desiredConfig = config;
+  const nextSessionKey = `${config.employeeId}:${config.sessionId}`;
+
+  if (currentSessionKey === nextSessionKey && room && localTrack) {
+    return;
+  }
+
+  await stopPublishing();
+  desiredConfig = config;
+
+  const tokenResponse = await fetchPublisherToken(config);
+  const nextRoom = new Room();
+
+  nextRoom.on(RoomEvent.Connected, () => {
+    log({ state: 'connected', room: tokenResponse.roomName, sessionId: config.sessionId });
+  });
+  nextRoom.on(RoomEvent.ConnectionStateChanged, (state) => {
+    log({ state: 'connection-state', value: state, sessionId: config.sessionId });
+  });
+  nextRoom.on(RoomEvent.Disconnected, (reason) => {
+    log({ state: 'disconnected', reason, sessionId: config.sessionId });
+  });
+
+  await nextRoom.connect(tokenResponse.livekitUrl, tokenResponse.token);
+  const track = await createScreenTrack(config.sourceId);
+  await nextRoom.localParticipant.publishTrack(track, {
+    source: Track.Source.ScreenShare,
+  });
+
+  room = nextRoom;
+  currentSessionKey = nextSessionKey;
+
+  track.mediaStreamTrack.addEventListener('ended', () => {
+    if (desiredConfig && currentSessionKey === nextSessionKey) {
+      log({ state: 'track-ended', sessionId: config.sessionId });
+      void stopPublishing();
+    }
+  });
+}
 
 if (globalScope.__worktrackCaptureRendererInitialized) {
   console.log('[AGENT] capture renderer already initialized');
 } else {
   globalScope.__worktrackCaptureRendererInitialized = true;
+  globalScope.__worktrackLivePublisher = window.livePublisher;
 
-  console.log('[AGENT] capture-renderer loaded');
-
-  const liveWatch = globalScope.__worktrackCaptureRendererLiveWatch || (window as any).liveWatch;
-  if (!liveWatch || typeof liveWatch.onStartCapture !== 'function') {
-    console.error('[AGENT][ERR] liveWatch preload bridge missing');
+  if (!window.livePublisher) {
+    console.error('[AGENT][LIVEKIT] preload bridge missing');
   } else {
-    globalScope.__worktrackCaptureRendererLiveWatch = liveWatch;
-
-    const pcs = new Map<string, RTCPeerConnection>();
-    const streams = new Map<string, MediaStream>();
-
-    function logErrorWithStack(message: string, error: unknown) {
-      console.error(message);
-      if (error instanceof Error) {
-        console.error(error.stack || error.message || String(error));
-      } else if (typeof error === 'object' && error !== null) {
-        console.error(JSON.stringify(error, null, 2));
-      } else {
-        console.error(String(error));
-      }
-    }
-
-    async function startCaptureForAdmin(sourceId: string, adminId: string, offer?: any, requestId?: string) {
-      console.log('[AGENT] starting capture for admin', { sourceId, adminId, requestId, hasOffer: Boolean(offer) });
-      stopCaptureForAdmin(adminId);
-
-      try {
-        const screenStream = await (navigator.mediaDevices as any).getUserMedia({
-          audio: false,
-          video: {
-            mandatory: {
-              chromeMediaSource: 'desktop',
-              chromeMediaSourceId: sourceId,
-              maxFrameRate: 15,
-            },
-          },
-        });
-
-        if (!screenStream) {
-          throw new Error('Screen stream failed to initialize');
-        }
-
-        const pc = new RTCPeerConnection({
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun.relay.metered.ca:80' },
-            { urls: 'turn:global.relay.metered.ca:80', username: '339635db329dc7164bf05f8f', credential: 'e9nkJFUYjEXW7lkq' },
-            { urls: 'turn:global.relay.metered.ca:443', username: '339635db329dc7164bf05f8f', credential: 'e9nkJFUYjEXW7lkq' },
-          ],
-        });
-
-        pc.onconnectionstatechange = () => {
-          console.log('[AGENT] connectionState', { adminId, state: pc.connectionState });
-        };
-        pc.oniceconnectionstatechange = () => {
-          console.log('[AGENT] iceConnectionState', { adminId, state: pc.iceConnectionState });
-        };
-        pc.onsignalingstatechange = () => {
-          console.log('[AGENT] signalingState', { adminId, state: pc.signalingState });
-        };
-        pc.onicecandidate = (e) => {
-          if (e.candidate) {
-            liveWatch.sendIceCandidate(adminId, e.candidate.toJSON(), requestId);
-          }
-        };
-
-        screenStream.getTracks().forEach((track: MediaStreamTrack) => pc.addTrack(track, screenStream));
-        pcs.set(adminId, pc);
-        streams.set(adminId, screenStream);
-
-        if (offer) {
-          await pc.setRemoteDescription(new RTCSessionDescription(offer));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          liveWatch.sendAnswer(adminId, pc.localDescription!.toJSON(), requestId);
-        }
-      } catch (err: any) {
-        logErrorWithStack('[AGENT][ERR] WebRTC setup failed', err);
-      }
-    }
-
-    function stopCaptureForAdmin(adminId?: string) {
-      const targetAdmins = adminId ? [adminId] : Array.from(pcs.keys());
-      targetAdmins.forEach((targetAdminId) => {
-        const stream = streams.get(targetAdminId);
-        stream?.getTracks().forEach((track) => track.stop());
-        streams.delete(targetAdminId);
-        pcs.get(targetAdminId)?.close();
-        pcs.delete(targetAdminId);
-      });
-    }
-
-    liveWatch.onStartCapture(({ sourceId, adminId, offer, requestId }: { sourceId: string; adminId: string; offer?: any; requestId?: string }) => {
-      startCaptureForAdmin(sourceId, adminId, offer, requestId).catch((err) => {
-        logErrorWithStack('[AGENT][ERR] startCapture rejected', err);
+    window.livePublisher.onStart((payload) => {
+      startPublishing(payload).catch((error) => {
+        log({ state: 'start-failed', message: error instanceof Error ? error.message : String(error) });
       });
     });
 
-    liveWatch.onStopCapture(({ adminId }: { adminId?: string } = {}) => stopCaptureForAdmin(adminId));
-
-    liveWatch.onRemoteAnswer(async ({ adminId, sdp, requestId }: { adminId: string; sdp: any; requestId?: string }) => {
-      const pc = pcs.get(adminId);
-      if (pc) {
-        try {
-          await pc.setRemoteDescription(new RTCSessionDescription(sdp));
-        } catch (err: any) {
-          console.error('[AGENT][ERR] failed to apply remote answer', err?.stack || err);
-        }
-      }
+    window.livePublisher.onStop(() => {
+      void stopPublishing();
     });
 
-    liveWatch.onRemoteIceCandidate(({ adminId, candidate, requestId }: { adminId: string; candidate: any; requestId?: string }) => {
-      const pc = pcs.get(adminId);
-      if (pc) {
-        pc.addIceCandidate(new RTCIceCandidate(candidate)).catch((err) => {
-          console.error('[AGENT][ERR] ICE candidate rejected', err?.stack || err);
-        });
-      }
-    });
-
-    console.log('[AGENT] capture renderer ready');
-    try {
-      liveWatch.sendReady();
-    } catch (err) {
-      console.error('[AGENT][ERR] failed to sendReady', err);
-    }
+    window.livePublisher.sendReady();
+    log({ state: 'ready' });
   }
 }

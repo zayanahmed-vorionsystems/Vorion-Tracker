@@ -152,7 +152,6 @@ export async function DELETE(req: NextRequest) {
   try {
     // 1. Delete related data first (correct table/column names)
     await sql`DELETE FROM app_activity    WHERE employee_id = ${id}`;
-    await sql`DELETE FROM website_activity WHERE employee_id = ${id}`;
     await sql`DELETE FROM screenshots     WHERE employee_id = ${id}`;
     await sql`DELETE FROM recordings      WHERE employee_id = ${id}`;
     await sql`DELETE FROM employee_status WHERE employee_id = ${id}`;

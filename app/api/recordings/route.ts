@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const [rec] = await sql`
-      INSERT INTO recordings (user_id, session_id, file_url, duration_seconds, captured_at)
+      INSERT INTO recordings (employee_id, session_id, file_url, duration_seconds, captured_at)
       VALUES (${user.sub}, ${sessionId}, ${publicUrl}, ${duration || null}, ${capturedAt})
       RETURNING id
     `;
@@ -82,8 +82,8 @@ export async function GET(req: NextRequest) {
     rows = await sql`
       SELECT r.*, p.full_name AS user_name
       FROM recordings r
-      JOIN public.profiles p ON p.id = r.user_id
-      WHERE r.user_id = ${user.sub}
+      JOIN public.profiles p ON p.id = r.employee_id
+      WHERE r.employee_id = ${user.sub}
       ORDER BY r.captured_at DESC
       LIMIT ${limit}
     `;
@@ -92,11 +92,11 @@ export async function GET(req: NextRequest) {
       rows = await sql`
         SELECT r.*, p.full_name AS user_name
         FROM recordings r
-        JOIN public.profiles p ON p.id = r.user_id
+        JOIN public.profiles p ON p.id = r.employee_id
         WHERE p.department_id = (
           SELECT department_id FROM public.profiles WHERE id = ${user.sub}
         )
-        AND r.user_id = ${filterUserId}
+        AND r.employee_id = ${filterUserId}
         ORDER BY r.captured_at DESC
         LIMIT ${limit}
       `;
@@ -104,7 +104,7 @@ export async function GET(req: NextRequest) {
       rows = await sql`
         SELECT r.*, p.full_name AS user_name
         FROM recordings r
-        JOIN public.profiles p ON p.id = r.user_id
+        JOIN public.profiles p ON p.id = r.employee_id
         WHERE p.department_id = (
           SELECT department_id FROM public.profiles WHERE id = ${user.sub}
         )
@@ -116,8 +116,8 @@ export async function GET(req: NextRequest) {
     rows = await sql`
       SELECT r.*, p.full_name AS user_name
       FROM recordings r
-      JOIN public.profiles p ON p.id = r.user_id
-      WHERE r.user_id = ${filterUserId}
+      JOIN public.profiles p ON p.id = r.employee_id
+      WHERE r.employee_id = ${filterUserId}
       ORDER BY r.captured_at DESC
       LIMIT ${limit}
     `;
@@ -125,7 +125,7 @@ export async function GET(req: NextRequest) {
     rows = await sql`
       SELECT r.*, p.full_name AS user_name
       FROM recordings r
-      JOIN public.profiles p ON p.id = r.user_id
+      JOIN public.profiles p ON p.id = r.employee_id
       ORDER BY r.captured_at DESC
       LIMIT ${limit}
     `;

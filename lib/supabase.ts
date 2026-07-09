@@ -1,31 +1,37 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Existing client-side client (uses anon key) — keep whatever you already have here
-export const supabaseClient = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+function isConfiguredValue(value?: string | null) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return false;
+  if (normalized.includes('REPLACE_IN_HOSTING_PROVIDER')) return false;
+  if (normalized.includes('placeholder.supabase.co')) return false;
+  return true;
+}
 
-// Server-side admin client — uses the service role key, bypasses RLS.
-// NEVER import this in client components — only in API routes / server code.
-export const supabaseAdmin = process.env.SUPABASE_SERVICE_ROLE_KEY
-  ? createClient(
-      process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY,
-      {
+const publicSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const publicSupabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const serverSupabaseUrl = process.env.SUPABASE_URL || publicSupabaseUrl;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+export const supabaseClient =
+  isConfiguredValue(publicSupabaseUrl) && isConfiguredValue(publicSupabaseAnonKey)
+    ? createClient(publicSupabaseUrl!, publicSupabaseAnonKey!)
+    : null;
+
+export const supabaseAdmin =
+  isConfiguredValue(serverSupabaseUrl) && isConfiguredValue(serviceRoleKey)
+    ? createClient(serverSupabaseUrl!, serviceRoleKey!, {
         auth: {
           autoRefreshToken: false,
           persistSession: false,
         },
-      }
-    )
-  : null;
+      })
+    : null;
 
 export function assertSupabaseAdmin() {
   if (!supabaseAdmin) {
     throw new Error(
-      'supabaseAdmin is not configured — SUPABASE_SERVICE_ROLE_KEY is missing or empty. ' +
-      'Set it in your environment and restart the server.'
+      'supabaseAdmin is not configured. Set real SUPABASE_URL/NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY values, then restart the server.'
     );
   }
   return supabaseAdmin;
