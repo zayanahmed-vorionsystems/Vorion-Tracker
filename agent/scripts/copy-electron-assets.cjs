@@ -5,6 +5,7 @@ const path = require('path');
 const projectRoot = path.resolve(__dirname, '..');
 const srcDir = path.join(projectRoot, 'src');
 const buildDir = path.join(projectRoot, 'build');
+const workspaceLogoPath = path.resolve(projectRoot, '..', 'public', 'logo.png');
 
 fs.mkdirSync(buildDir, { recursive: true });
 
@@ -33,5 +34,12 @@ function walk(dir) {
 }
 
 walk(srcDir);
+
+if (fs.existsSync(workspaceLogoPath)) {
+  const rendererLogoPath = path.join(buildDir, 'renderer', 'logo.png');
+  fs.mkdirSync(path.dirname(rendererLogoPath), { recursive: true });
+  fs.copyFileSync(workspaceLogoPath, rendererLogoPath);
+  copiedFiles.push(path.relative(buildDir, rendererLogoPath));
+}
 
 console.log(`[copy-electron-assets] copied ${copiedFiles.length} static file(s) to ${buildDir}`);

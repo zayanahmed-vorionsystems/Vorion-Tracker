@@ -5,9 +5,10 @@
   "main": "build/main.js",
   "scripts": {
     "generate:embedded-config": "node scripts/generate-embedded-config.cjs",
+    "generate:app-icon": "node scripts/generate-app-icon.cjs",
     "dev": "concurrently \"vite\" \"tsc -p tsconfig.electron.json --watch\" \"esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=build/capture-renderer.js --watch\" \"node scripts/copy-electron-assets.cjs\" \"wait-on http://localhost:5174 && wait-on build/main.js && electron .\"",
-    "build": "node scripts/clean-release.cjs && npm run generate:embedded-config && vite build && tsc -p tsconfig.electron.json && esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=build/capture-renderer.js && esbuild src/capture-preload.ts --bundle --platform=node --external:electron --format=cjs --outfile=build/capture-preload.js && node scripts/copy-electron-assets.cjs && electron-builder --win",
-    "pack": "node scripts/clean-release.cjs && npm run generate:embedded-config && electron-builder --dir"
+    "build": "node scripts/clean-release.cjs && npm run generate:embedded-config && npm run generate:app-icon && vite build && tsc -p tsconfig.electron.json && esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=build/capture-renderer.js && esbuild src/capture-preload.ts --bundle --platform=node --external:electron --format=cjs --outfile=build/capture-preload.js && node scripts/copy-electron-assets.cjs && electron-builder --win",
+    "pack": "node scripts/clean-release.cjs && npm run generate:embedded-config && npm run generate:app-icon && electron-builder --dir"
   },
   "dependencies": {
     "axios": "^1.6.8",
@@ -33,8 +34,8 @@
     "wait-on": "^7.2.0"
   },
   "build": {
-    "appId": "com.yourcompany.worktrack-agent",
-    "productName": "WorkTrack Agent",
+    "appId": "com.vorionsystems.vorion-tracker",
+    "productName": "Vorion Tracker",
     "asar": true,
     "directories": {
       "output": "release"
@@ -47,6 +48,7 @@
       "src/capture.html"
     ],
     "win": {
+      "icon": "assets/icon.ico",
       "signAndEditExecutable": false,
       "target": [
         {
@@ -61,7 +63,7 @@
       "oneClick": true,
       "perMachine": false,
       "runAfterFinish": true,
-      "shortcutName": "WorkTrack Agent"
+      "shortcutName": "Vorion Tracker"
     },
     "mac": {
       "target": [
@@ -80,15 +82,15 @@
       "hardenedRuntime": true
     },
     "dmg": {
-      "title": "WorkTrack Agent",
+      "title": "Vorion Tracker",
       "icon": "assets/icon.icns"
     },
     "linux": {
+      "icon": "assets/icon.png",
       "target": [
         "AppImage",
         "tar.gz"
       ],
-      "icon": "assets/icon.png",
       "category": "Utility"
     }
   }

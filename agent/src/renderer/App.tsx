@@ -151,9 +151,16 @@ export default function App() {
     <div style={{ fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif', minHeight:'100vh', background:'radial-gradient(circle at top, #1f2937 0%, #05070b 70%, #020304 100%)', padding:20, color:'#f8fafc' }}>
       <div style={{ maxWidth:480, margin:'0 auto', background:'linear-gradient(145deg, rgba(15,23,42,0.96), rgba(3,7,18,0.98))', borderRadius:28, padding:28, boxShadow:'0 0 0 1px rgba(255,255,255,0.06), 0 20px 70px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.06)' }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, marginBottom:8 }}>
-          <div>
-            <h1 style={{ margin:0, fontSize:26, fontWeight:700, color:'#f8fafc', textShadow:'0 0 12px rgba(248,250,252,0.16)' }}>WorkTrack</h1>
-            <p style={{ margin:'8px 0 0', color:'#94a3b8', lineHeight:1.5 }}>Employee mode: check-in, break controls, and checkout from one place.</p>
+          <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+            <img
+              src="./logo.png"
+              alt="Vorion Tracker logo"
+              style={{ width:52, height:52, objectFit:'contain', borderRadius:14, background:'rgba(255,255,255,0.04)', padding:6, boxShadow:'inset 0 1px 0 rgba(255,255,255,0.05)' }}
+            />
+            <div>
+              <h1 style={{ margin:0, fontSize:26, fontWeight:700, color:'#f8fafc', textShadow:'0 0 12px rgba(248,250,252,0.16)' }}>Vorion Tracker</h1>
+              <p style={{ margin:'8px 0 0', color:'#94a3b8', lineHeight:1.5 }}>Employee mode: check-in, break controls, and checkout from one place.</p>
+            </div>
           </div>
           {loggedIn && (
             <button onClick={async () => {

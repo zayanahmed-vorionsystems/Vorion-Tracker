@@ -2,6 +2,16 @@
 import * as dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
+// Main-process deps must stay above bootstrap code so CommonJS emits them before use.
+import { app } from 'electron';
+import {
+   BrowserWindow, Tray, Menu, nativeImage,
+  ipcMain, powerMonitor, desktopCapturer, screen, shell, dialog
+} from 'electron';
+import os from 'os';
+import https from 'https';
+import http from 'http';
+import { EMBEDDED_ENV } from './embedded-config';
 
 function getAncestorEnvCandidates(baseDir: string) {
   if (!baseDir) return [];
@@ -131,15 +141,6 @@ console.log('[AGENT] env load check', {
   SERVER_URL: Boolean(process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || EMBEDDED_ENV.WORKTRACK_SERVER || EMBEDDED_ENV.NEXT_PUBLIC_APP_URL),
   LIVEKIT_URL: Boolean(process.env.LIVEKIT_URL || EMBEDDED_ENV.LIVEKIT_URL),
 });
-import { app } from 'electron';
-import {
-   BrowserWindow, Tray, Menu, nativeImage,
-  ipcMain, powerMonitor, desktopCapturer, screen, shell, dialog
-} from 'electron';
-import os     from 'os';
-import https  from 'https';
-import http   from 'http';
-import { EMBEDDED_ENV } from './embedded-config';
 // FIX: teardownLiveWatch must be imported from './live-watch' — the real
 // A local no-op function with the same name used to be declared further
 // down in this file, which shadowed this import and meant the real channel
@@ -221,6 +222,8 @@ let cachedBlockedWebsites:any[] = [];
 let policySyncInFlight = false;
 // tracks which blocked domains we've already reported recently, to avoid spamming events
 const recentlyReportedDomains = new Map<string, number>();
+// tracks recently handled blocked processes, so repeated scans don't reopen the same warning dialog
+const recentlyHandledProcesses = new Map<string, number>();
 set('agentId', agentId);
 
 // ─── Live streaming state (WebRTC) ──────────────────────────────────────────
@@ -580,18 +583,37 @@ async function scanBlockedApps() {
     console.log(`[SECURITY] Blocked process names: ${blockedNames.join(', ')}`);
     if (!blockedNames.length) return;
 
+    const runningNormalized = new Set(
+      runningProcesses
+        .map((processName) => normalizeProcessName(processName))
+        .filter(Boolean),
+    );
+
+    for (const processName of Array.from(recentlyHandledProcesses.keys())) {
+      if (!runningNormalized.has(processName)) {
+        recentlyHandledProcesses.delete(processName);
+      }
+    }
+
     let violationFound = false;
     for (const processName of runningProcesses) {
       const np = normalizeProcessName(processName);
       if (!np || !blockedNames.includes(np)) continue;
+      const now = Date.now();
+      const lastHandledAt = recentlyHandledProcesses.get(np) || 0;
+      if (now - lastHandledAt < 15000) continue;
+
       violationFound = true;
+      recentlyHandledProcesses.set(np, now);
       console.log(`[SECURITY] 🚨 Found blocked process: ${processName}`);
       if (cachedPolicy.showWarning) {
         dialog.showMessageBoxSync({ type:'warning', title:'Blocked Application', message:`"${processName}" is blocked by your organization and will be closed.` });
       }
       if (cachedPolicy.killProcess) {
-        await new Promise<void>((resolve) => { exec(`taskkill /F /IM "${processName}"`, () => resolve()); });
-        console.log(`[SECURITY] ✅ Process terminated: ${processName}`);
+        await new Promise<void>((resolve) => {
+          exec(`taskkill /F /IM "${processName}"`, () => resolve());
+        });
+        console.log(`[SECURITY] ✅ Process termination requested: ${processName}`);
       }
       await submitSecurityEvent('blocked_app', np, cachedPolicy.killProcess ? 'terminated' : 'warning_shown');
     }
@@ -754,15 +776,17 @@ function updateTray() {
     { type:'separator' },
     { label: 'Quit', click:()=>{ stopTracking(); app.exit(0); } },
   ]));
-  tray.setToolTip(tracking?`WorkTrack — tracking ${userName}`:'WorkTrack — not tracking');
+  tray.setToolTip(tracking?`Vorion Tracker — tracking ${userName}`:'Vorion Tracker — not tracking');
 }
 
 // ─── Window ─────────────────────────────────────────────────────────────────
 async function createWindow() {
   const preloadPath = path.join(__dirname, 'preload.js');
   const indexPath = path.join(__dirname, 'renderer', 'index.html');
+  const iconPath = path.join(__dirname, 'renderer', 'logo.png');
   const hasPreload = fs.existsSync(preloadPath);
   const hasBuiltRenderer = fs.existsSync(indexPath);
+  const hasIcon = fs.existsSync(iconPath);
 
   console.log('[AGENT] createWindow paths', {
     __dirname,
@@ -770,11 +794,14 @@ async function createWindow() {
     hasPreload,
     indexPath,
     hasBuiltRenderer,
+    iconPath,
+    hasIcon,
   });
 
   mainWindow = new BrowserWindow({
     width:560, height:760, resizable:true,
-    title:'Vorian Tracker Agent',
+    title:'Vorion Tracker',
+    icon: hasIcon ? iconPath : undefined,
     webPreferences:{ preload:preloadPath, contextIsolation:true, nodeIntegration:false },
     show: true,
   });
@@ -811,7 +838,7 @@ async function createWindow() {
       console.error('[AGENT] built renderer not found', { indexPath });
       await mainWindow.loadURL(`data:text/html,${encodeURIComponent(`
         <html><body style="font-family:Segoe UI,sans-serif;padding:24px;background:#111827;color:#f8fafc">
-          <h2>WorkTrack Agent failed to start</h2>
+          <h2>Vorion Tracker failed to start</h2>
           <p>Built renderer not found.</p>
           <pre>${indexPath}</pre>
         </body></html>
@@ -824,7 +851,7 @@ async function createWindow() {
       console.error('[AGENT] failed to load built renderer', formatError(error));
       await mainWindow.loadURL(`data:text/html,${encodeURIComponent(`
         <html><body style="font-family:Segoe UI,sans-serif;padding:24px;background:#111827;color:#f8fafc">
-          <h2>WorkTrack Agent failed to load UI</h2>
+          <h2>Vorion Tracker failed to load UI</h2>
           <p>${String(formatError(error)).replace(/[<>&]/g, '')}</p>
           <pre>${indexPath}</pre>
           <pre>${preloadPath}</pre>
