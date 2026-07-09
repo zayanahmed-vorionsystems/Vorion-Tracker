@@ -41,6 +41,33 @@ function loadAgentEnv() {
   }
 }
 
+function normalizeServerUrl(rawValue?: string | null) {
+  const trimmedValue = String(rawValue || '').trim();
+  if (!trimmedValue) return '';
+
+  const withProtocol = /^[a-z]+:\/\//i.test(trimmedValue) ? trimmedValue : `https://${trimmedValue}`;
+
+  try {
+    const normalizedUrl = new URL(withProtocol);
+    normalizedUrl.pathname = normalizedUrl.pathname === '/' ? '/' : `${normalizedUrl.pathname.replace(/\/+$/, '')}/`;
+    return normalizedUrl.toString();
+  } catch {
+    return '';
+  }
+}
+
+function isLocalServerUrl(rawValue?: string | null) {
+  const normalizedValue = normalizeServerUrl(rawValue);
+  if (!normalizedValue) return false;
+
+  try {
+    const { hostname } = new URL(normalizedValue);
+    return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '::1';
+  } catch {
+    return false;
+  }
+}
+
 function setupFileLogging() {
   try {
     const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR || '';
@@ -110,8 +137,17 @@ import type { IncomingMessage } from 'http';
 import { syncProxyBlock, removeProxyBlock } from './websiteBlock';
 
 // ─── Config ────────────────────────────────────────────────────────────────
-const isDev      = !app.isPackaged;
-const SERVER_URL = process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || (isDev ? 'http://127.0.0.1:3000' : 'https://tracker.vorionsystems.com/');
+const isDev = !app.isPackaged;
+const configuredServerUrl = process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || '';
+const fallbackServerUrl = isDev ? 'http://127.0.0.1:3000/' : 'https://tracker.vorionsystems.com/';
+const SERVER_URL = (() => {
+  const normalizedConfiguredUrl = normalizeServerUrl(configuredServerUrl);
+
+  if (!normalizedConfiguredUrl) return fallbackServerUrl;
+  if (!isDev && isLocalServerUrl(normalizedConfiguredUrl)) return 'https://tracker.vorionsystems.com/';
+
+  return normalizedConfiguredUrl;
+})();
 
 // ─── Persistent store ──────────────────────────────────────────────────────
 const DATA_DIR   = app.getPath('userData');
@@ -575,6 +611,12 @@ async function scanBlockedApps() {
 // ─────────────────────────────────────────────────────────────────────────
 
 console.log('WorkTrack agent using SERVER_URL=', SERVER_URL);
+if (!isDev && configuredServerUrl && isLocalServerUrl(configuredServerUrl)) {
+  console.warn('[AGENT] ignoring local-only server URL in packaged build', {
+    configuredServerUrl,
+    effectiveServerUrl: SERVER_URL,
+  });
+}
 
 function broadcastStatus(extra: Record<string, any> = {}) {
   const payload = { agentId, employeeId, userName, status, sessionId, activeApp: lastActiveApp, activityPct: lastActivityPct, heartbeat: new Date().toISOString(), capturedAt: new Date().toISOString(), ...extra };
@@ -587,6 +629,17 @@ async function sendHeartbeat() {
     await apiRequest('POST', '/api/heartbeat', { currentApp: lastActiveApp, activityPct: lastActivityPct, status, timestamp: new Date().toISOString() });
     void ensureLiveWatchRunning();
   } catch (err:any) { console.error('Heartbeat failed:', err?.message || err); }
+}
+
+function getFriendlyRequestError(err: any) {
+  const message = err?.message || String(err || 'Unknown error');
+  if (!/ECONNREFUSED/i.test(message)) return message;
+
+  if (isLocalServerUrl(SERVER_URL)) {
+    return `Agent is configured to use ${SERVER_URL}. Update WORKTRACK_SERVER or NEXT_PUBLIC_APP_URL to your deployed domain and rebuild the agent.`;
+  }
+
+  return `Unable to reach ${SERVER_URL}. Confirm the deployed domain is online and accessible from this device.`;
 }
 
 function getScreenshotTargetSize() {
@@ -755,7 +808,7 @@ ipcMain.handle('login', async (_e, email:string, password:string) => {
     return { ok:true, user:res.user };
   } catch (error:any) {
     console.error('Login failed:', error);
-    return { ok:false, error: error?.message || 'Login failed' };
+    return { ok:false, error: getFriendlyRequestError(error) };
   }
 });
 ipcMain.handle('logout', async () => {
