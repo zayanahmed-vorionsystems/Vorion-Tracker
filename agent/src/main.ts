@@ -113,11 +113,23 @@ function setupFileLogging() {
   }
 }
 
+function formatError(error: unknown) {
+  if (error instanceof Error) return error.stack || error.message;
+  if (typeof error === 'string') return error;
+  try { return JSON.stringify(error); } catch { return String(error); }
+}
+
 loadAgentEnv();
 setupFileLogging();
+process.on('uncaughtException', (error) => {
+  console.error('[AGENT] uncaughtException', formatError(error));
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[AGENT] unhandledRejection', formatError(reason));
+});
 console.log('[AGENT] env load check', {
-  SERVER_URL: Boolean(process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL),
-  LIVEKIT_URL: Boolean(process.env.LIVEKIT_URL),
+  SERVER_URL: Boolean(process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || EMBEDDED_ENV.WORKTRACK_SERVER || EMBEDDED_ENV.NEXT_PUBLIC_APP_URL),
+  LIVEKIT_URL: Boolean(process.env.LIVEKIT_URL || EMBEDDED_ENV.LIVEKIT_URL),
 });
 import { app } from 'electron';
 import {
@@ -127,6 +139,7 @@ import {
 import os     from 'os';
 import https  from 'https';
 import http   from 'http';
+import { EMBEDDED_ENV } from './embedded-config';
 // FIX: teardownLiveWatch must be imported from './live-watch' — the real
 // A local no-op function with the same name used to be declared further
 // down in this file, which shadowed this import and meant the real channel
@@ -138,7 +151,7 @@ import { syncProxyBlock, removeProxyBlock } from './websiteBlock';
 
 // ─── Config ────────────────────────────────────────────────────────────────
 const isDev = !app.isPackaged;
-const configuredServerUrl = process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || '';
+const configuredServerUrl = process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || EMBEDDED_ENV.WORKTRACK_SERVER || EMBEDDED_ENV.NEXT_PUBLIC_APP_URL || '';
 const fallbackServerUrl = isDev ? 'http://127.0.0.1:3000/' : 'https://tracker.vorionsystems.com/';
 const SERVER_URL = (() => {
   const normalizedConfiguredUrl = normalizeServerUrl(configuredServerUrl);
@@ -746,22 +759,38 @@ function updateTray() {
 
 // ─── Window ─────────────────────────────────────────────────────────────────
 async function createWindow() {
+  const preloadPath = path.join(__dirname, 'preload.js');
+  const indexPath = path.join(__dirname, 'renderer', 'index.html');
+  const hasPreload = fs.existsSync(preloadPath);
+  const hasBuiltRenderer = fs.existsSync(indexPath);
+
+  console.log('[AGENT] createWindow paths', {
+    __dirname,
+    preloadPath,
+    hasPreload,
+    indexPath,
+    hasBuiltRenderer,
+  });
+
   mainWindow = new BrowserWindow({
     width:560, height:760, resizable:true,
     title:'Vorian Tracker Agent',
-    webPreferences:{ preload:path.join(__dirname,'preload.js'), contextIsolation:true, nodeIntegration:false },
+    webPreferences:{ preload:preloadPath, contextIsolation:true, nodeIntegration:false },
     show: true,
   });
 
   mainWindow.webContents.on('did-fail-load', (_, code, desc, url) => {
     console.log('LOAD FAILED:', code, desc, url);
   });
+  mainWindow.webContents.on('did-finish-load', () => {
+    console.log('[AGENT] renderer finished load');
+  });
+  mainWindow.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+    console.log('[AGENT][renderer console]', { level, message, line, sourceId });
+  });
   mainWindow.webContents.on('render-process-gone', (_, details) => {
     console.log('RENDERER CRASHED:', details);
   });
-
-  const indexPath = path.join(__dirname, 'renderer', 'index.html');
-  const hasBuiltRenderer = fs.existsSync(indexPath);
 
   if (isDev) {
     try {
@@ -780,9 +809,28 @@ async function createWindow() {
     console.log('Loading index from:', indexPath, '| exists:', hasBuiltRenderer);
     if (!hasBuiltRenderer) {
       console.error('[AGENT] built renderer not found', { indexPath });
+      await mainWindow.loadURL(`data:text/html,${encodeURIComponent(`
+        <html><body style="font-family:Segoe UI,sans-serif;padding:24px;background:#111827;color:#f8fafc">
+          <h2>WorkTrack Agent failed to start</h2>
+          <p>Built renderer not found.</p>
+          <pre>${indexPath}</pre>
+        </body></html>
+      `)}`);
       return;
     }
-    await mainWindow.loadFile(indexPath);
+    try {
+      await mainWindow.loadFile(indexPath);
+    } catch (error) {
+      console.error('[AGENT] failed to load built renderer', formatError(error));
+      await mainWindow.loadURL(`data:text/html,${encodeURIComponent(`
+        <html><body style="font-family:Segoe UI,sans-serif;padding:24px;background:#111827;color:#f8fafc">
+          <h2>WorkTrack Agent failed to load UI</h2>
+          <p>${String(formatError(error)).replace(/[<>&]/g, '')}</p>
+          <pre>${indexPath}</pre>
+          <pre>${preloadPath}</pre>
+        </body></html>
+      `)}`);
+    }
   }
 
   mainWindow.on('close',(e)=>{ e.preventDefault(); mainWindow?.hide(); });
