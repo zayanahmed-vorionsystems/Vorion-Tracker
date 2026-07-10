@@ -5,7 +5,7 @@ const path = require('path');
 const projectRoot = path.resolve(__dirname, '..');
 const srcDir = path.join(projectRoot, 'src');
 const buildDir = path.join(projectRoot, 'build');
-const workspaceLogoPath = path.resolve(projectRoot, '..', 'public', 'logo.png');
+const workspaceLogoPath = path.resolve(projectRoot, '..', 'public', 'Vorion With bg.png');
 
 fs.mkdirSync(buildDir, { recursive: true });
 

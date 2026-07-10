@@ -207,6 +207,7 @@ let sessionId:   string             = '';
 let agentId:     string             = get('agentId') || `agent-${Math.random().toString(36).slice(2,10)}`;
 let status:      'offline'|'active'|'break'|'idle' = 'offline';
 let tracking     = false;
+let isQuitting   = false;
 let ssInterval:         NodeJS.Timeout|null = null;
 let idleInterval:       NodeJS.Timeout|null = null;
 let heartbeatInterval:  NodeJS.Timeout|null = null;
@@ -226,6 +227,11 @@ const recentlyReportedDomains = new Map<string, number>();
 const recentlyHandledProcesses = new Map<string, number>();
 set('agentId', agentId);
 
+function clearTimer(timer: NodeJS.Timeout | null) {
+  if (timer) clearInterval(timer);
+  return null;
+}
+
 // ─── Live streaming state (WebRTC) ──────────────────────────────────────────
 
 // ─── Single instance lock ───────────────────────────────────────────────────
@@ -234,6 +240,11 @@ app.on('second-instance', () => mainWindow?.show());
 
 // ─── Auto-start with OS ────────────────────────────────────────────────────
 app.setLoginItemSettings({ openAtLogin: true, openAsHidden: true });
+app.commandLine.appendSwitch('disable-background-networking');
+app.commandLine.appendSwitch('disable-component-update');
+app.commandLine.appendSwitch('disable-domain-reliability');
+app.commandLine.appendSwitch('disable-sync');
+app.commandLine.appendSwitch('no-pings');
 
 // ─── HTTP helper ────────────────────────────────────────────────────────────
 class HttpError extends Error {
@@ -739,12 +750,12 @@ async function stopTracking() {
 
   await endSession();
 
-  if (ssInterval) clearInterval(ssInterval);
-  if (idleInterval) clearInterval(idleInterval);
-  if (heartbeatInterval) clearInterval(heartbeatInterval);
-  if (policyInterval) clearInterval(policyInterval);
-  if (scanInterval) clearInterval(scanInterval);
-  if (policySyncInterval) clearInterval(policySyncInterval);
+  ssInterval = clearTimer(ssInterval);
+  idleInterval = clearTimer(idleInterval);
+  heartbeatInterval = clearTimer(heartbeatInterval);
+  policyInterval = clearTimer(policyInterval);
+  scanInterval = clearTimer(scanInterval);
+  policySyncInterval = clearTimer(policySyncInterval);
 
   updateTray();
 
@@ -802,8 +813,15 @@ async function createWindow() {
     width:560, height:760, resizable:true,
     title:'Vorion Tracker',
     icon: hasIcon ? iconPath : undefined,
-    webPreferences:{ preload:preloadPath, contextIsolation:true, nodeIntegration:false },
-    show: true,
+    autoHideMenuBar: true,
+    backgroundColor: '#020304',
+    webPreferences:{
+      preload:preloadPath,
+      contextIsolation:true,
+      nodeIntegration:false,
+      spellcheck:false,
+    },
+    show: false,
   });
 
   mainWindow.webContents.on('did-fail-load', (_, code, desc, url) => {
@@ -860,7 +878,19 @@ async function createWindow() {
     }
   }
 
-  mainWindow.on('close',(e)=>{ e.preventDefault(); mainWindow?.hide(); });
+  mainWindow.on('close', (event) => {
+    if (isQuitting) return;
+
+    if (tracking) {
+      event.preventDefault();
+      mainWindow?.hide();
+      return;
+    }
+
+    isQuitting = true;
+    tray?.destroy();
+    tray = null;
+  });
 }
 
 // ─── IPC ────────────────────────────────────────────────────────────────────
@@ -913,8 +943,8 @@ ipcMain.handle('start-tracking',   () => { status = 'active'; return startTracki
 ipcMain.handle('start-work',       async () => { status = 'active'; await startTracking(); return { ok: true }; });
 ipcMain.handle('start-break',      async () => {
   status = 'break';
-  if (ssInterval)        clearInterval(ssInterval);
-  if (heartbeatInterval) clearInterval(heartbeatInterval);
+  ssInterval = clearTimer(ssInterval);
+  heartbeatInterval = clearTimer(heartbeatInterval);
   await sessionAction('start_break', { sessionId });
   broadcastStatus();
   return { ok: true };
@@ -922,6 +952,8 @@ ipcMain.handle('start-break',      async () => {
 ipcMain.handle('end-break', async () => {
   status = 'active';
   await sessionAction('end_break', { sessionId });
+  ssInterval = clearTimer(ssInterval);
+  heartbeatInterval = clearTimer(heartbeatInterval);
   ssInterval        = setInterval(captureAndUpload, captureIntervalSec * 1000);
   heartbeatInterval = setInterval(() => sendHeartbeat(), 30000);
   broadcastStatus();
@@ -936,7 +968,7 @@ ipcMain.handle('checkout', async () => {
   void endSession();
   return { ok: true };
 });
-app.commandLine.appendSwitch('disable-features', 'DesktopCaptureUseDxgi');
+app.commandLine.appendSwitch('disable-features', 'DesktopCaptureUseDxgi,SpareRendererForSitePerProcess,CalculateNativeWinOcclusion');
 // ─── Boot ────────────────────────────────────────────────────────────────────
 app.whenReady().then(async ()=>{
   await createWindow();
@@ -984,5 +1016,16 @@ app.whenReady().then(async ()=>{
   }
 });
 
-app.on('window-all-closed',()=>{ /* keep alive in tray */ });
-app.on('before-quit',()=>{ tracking && stopTracking(); void teardownLiveWatch(); removeProxyBlock(); });
+app.on('window-all-closed', () => {
+  if (tracking) return;
+  isQuitting = true;
+  app.quit();
+});
+app.on('before-quit', () => {
+  isQuitting = true;
+  tray?.destroy();
+  tray = null;
+  tracking && stopTracking();
+  void teardownLiveWatch();
+  removeProxyBlock();
+});

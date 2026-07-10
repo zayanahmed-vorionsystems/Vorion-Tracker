@@ -154,7 +154,7 @@ export default function App() {
           <div style={{ display:'flex', alignItems:'center', gap:14 }}>
             <img
               src="./logo.png"
-              alt="Vorion Tracker logo"
+              alt="Vorion Agent logo"
               style={{ width:52, height:52, objectFit:'contain', borderRadius:14, background:'rgba(255,255,255,0.04)', padding:6, boxShadow:'inset 0 1px 0 rgba(255,255,255,0.05)' }}
             />
             <div>

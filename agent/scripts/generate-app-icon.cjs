@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const projectRoot = path.resolve(__dirname, '..');
-const sourcePngPath = path.resolve(projectRoot, '..', 'public', 'logo.png');
+const sourcePngPath = path.resolve(projectRoot, '..', 'public', 'Vorion With bg.png');
 const assetsDir = path.join(projectRoot, 'assets');
 const targetIcoPath = path.join(assetsDir, 'icon.ico');
 const targetPngPath = path.join(assetsDir, 'icon.png');
