@@ -155,9 +155,9 @@ export async function POST(req: NextRequest) {
   }
 
   if (normalizedRole === 'superadmin') {
-    const existingSuperAdmins = await sql`SELECT id FROM public.profiles WHERE role = 'superadmin' LIMIT 1`;
-    if (existingSuperAdmins.length > 0) {
-      return err('Only one super admin account is allowed.', 403);
+    const existingSuperAdmins = await sql`SELECT id FROM public.profiles WHERE role = 'superadmin' LIMIT 2`;
+    if (existingSuperAdmins.length >= 2) {
+      return err('Only two super admin accounts are allowed.', 403);
     }
   }
 
@@ -268,9 +268,9 @@ export async function PATCH(req: NextRequest) {
     }
 
     if (nextRole === 'superadmin') {
-      const existingSuperAdmins = await sql`SELECT id FROM public.profiles WHERE role = 'superadmin' AND id != ${id} LIMIT 1`;
-      if (existingSuperAdmins.length > 0) {
-        return err('Only one super admin account is allowed.', 403);
+      const existingSuperAdmins = await sql`SELECT id FROM public.profiles WHERE role = 'superadmin' AND id != ${id} LIMIT 2`;
+      if (existingSuperAdmins.length >= 2) {
+        return err('Only two super admin accounts are allowed.', 403);
       }
     }
   }
