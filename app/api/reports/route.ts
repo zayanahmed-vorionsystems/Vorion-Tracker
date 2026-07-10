@@ -2,6 +2,23 @@
 import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
+import { canMonitorAll, normalizeRole, type ShiftType } from '@/lib/roles';
+import {
+  getShiftWindowsForUtcRange,
+  getUtcRangeForLocalDate,
+  isScreenshotWithinShiftInPkt,
+} from '@/lib/shifts';
+
+function overlapSeconds(startIso: string | null, endIso: string | null, windows: Array<{ start: Date; end: Date }>) {
+  if (!startIso) return 0;
+  const start = new Date(startIso);
+  const end = new Date(endIso || new Date().toISOString());
+  return windows.reduce((sum, window) => {
+    const overlapStart = Math.max(start.getTime(), window.start.getTime());
+    const overlapEnd = Math.min(end.getTime(), window.end.getTime());
+    return sum + Math.max(0, Math.floor((overlapEnd - overlapStart) / 1000));
+  }, 0);
+}
 
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
@@ -10,13 +27,98 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const type   = searchParams.get('type') || 'daily';
   const date   = searchParams.get('date') || new Date().toISOString().slice(0, 10);
-  const isEmployee = user.role === 'employee';
-  const isTeamLead = user.role === 'team_lead';
+  const timeZone = searchParams.get('tz') || 'America/New_York';
+  const role = normalizeRole(user.role);
+  const isEmployee = role === 'employee';
+  const isClient = role === 'client';
+  const canViewAll = canMonitorAll(role);
 
   try {
+    if (!isEmployee && !isClient && !canViewAll) {
+      return err('Forbidden', 403);
+    }
 
     // ── DAILY DASHBOARD SUMMARY ──────────────────────────────────────────
     if (type === 'daily') {
+      if (isClient) {
+        const dayRange = getUtcRangeForLocalDate(date, timeZone);
+        const assignedEmployees = await sql`
+          SELECT
+            p.id,
+            p.full_name AS name,
+            p.role,
+            p.department_id,
+            p.shift_type,
+            es.current_status,
+            es.current_app,
+            es.last_activity
+          FROM client_assignments ca
+          JOIN public.profiles p ON p.id = ca.employee_id
+          LEFT JOIN employee_status es ON es.employee_id = p.id
+          WHERE ca.client_id = ${user.sub}
+          ORDER BY p.full_name
+        `;
+
+        const rowsByEmployee = new Map<string, any>();
+        for (const row of assignedEmployees || []) {
+          const existing = rowsByEmployee.get(row.id) || {
+            id: row.id,
+            name: row.name,
+            role: row.role,
+            department_id: row.department_id,
+            total_seconds: 0,
+            screenshot_count: 0,
+            avg_activity_pct: null,
+            last_active: row.last_activity || null,
+            current_status: row.current_status || 'offline',
+            current_app: row.current_app || null,
+          };
+          rowsByEmployee.set(row.id, existing);
+        }
+
+        for (const row of assignedEmployees || []) {
+          const shiftWindows = getShiftWindowsForUtcRange(dayRange.start, dayRange.end, row.shift_type || 'full_time');
+          const attendanceRows = await sql`
+            SELECT check_in, check_out
+            FROM attendance
+            WHERE employee_id = ${row.id}
+              AND check_in < ${dayRange.endIso}
+              AND COALESCE(check_out, NOW()) > ${dayRange.startIso}
+          `;
+          const screenshotRows = await sql`
+            SELECT activity_pct, captured_at
+            FROM screenshots
+            WHERE employee_id = ${row.id}
+              AND captured_at >= ${dayRange.startIso}
+              AND captured_at < ${dayRange.endIso}
+          `;
+
+          const visibleScreenshots = screenshotRows.filter((shot: any) =>
+            isScreenshotWithinShiftInPkt(shot.captured_at, row.shift_type || 'full_time'),
+          );
+          const existing = rowsByEmployee.get(row.id);
+          existing.total_seconds += (attendanceRows || []).reduce(
+            (sum: number, attendance: any) => sum + overlapSeconds(attendance.check_in, attendance.check_out, shiftWindows),
+            0,
+          );
+          existing.screenshot_count += visibleScreenshots.length;
+          if (visibleScreenshots.length > 0) {
+            const avg = visibleScreenshots.reduce((sum: number, shot: any) => sum + Number(shot.activity_pct || 0), 0) / visibleScreenshots.length;
+            existing.avg_activity_pct = existing.avg_activity_pct == null
+              ? avg
+              : (existing.avg_activity_pct + avg) / 2;
+            const latest = visibleScreenshots
+              .map((shot: any) => shot.captured_at)
+              .sort((a: string, b: string) => new Date(b).getTime() - new Date(a).getTime())[0];
+            if (latest && (!existing.last_active || new Date(latest) > new Date(existing.last_active))) {
+              existing.last_active = latest;
+            }
+          }
+        }
+
+        return ok({ date, rows: Array.from(rowsByEmployee.values()) });
+      }
+
       const rows = await sql`
         WITH break_summary AS (
           SELECT
@@ -102,8 +204,7 @@ export async function GET(req: NextRequest) {
         WHERE p.role = 'employee'
           AND (
             (${isEmployee} = true AND p.id = ${user.sub})
-            OR (${isTeamLead} = true AND p.department_id = ${user.teamId})
-            OR (${isEmployee} = false AND ${isTeamLead} = false)
+            OR (${isEmployee} = false)
           )
         ORDER BY total_seconds DESC
       `;
@@ -112,6 +213,9 @@ export async function GET(req: NextRequest) {
 
     // ── WEEKLY SUMMARY ───────────────────────────────────────────────────
     if (type === 'weekly') {
+      if (isClient) {
+        return ok([]);
+      }
       const rows = await sql`
         WITH break_summary AS (
           SELECT
@@ -135,8 +239,7 @@ export async function GET(req: NextRequest) {
             AND p.role = 'employee'
             AND (
               (${isEmployee} = true AND a.employee_id = ${user.sub})
-              OR (${isTeamLead} = true AND p.department_id = ${user.teamId})
-              OR (${isEmployee} = false AND ${isTeamLead} = false)
+              OR (${isEmployee} = false)
             )
         )
         SELECT
@@ -155,8 +258,7 @@ export async function GET(req: NextRequest) {
             WHERE DATE(s.captured_at) = day
               AND (
                 (${isEmployee} = true AND s.employee_id = ${user.sub})
-                OR (${isTeamLead} = true AND sp.department_id = ${user.teamId})
-                OR (${isEmployee} = false AND ${isTeamLead} = false)
+                OR (${isEmployee} = false)
               )
           )                                            AS screenshots
         FROM attendance_weekly

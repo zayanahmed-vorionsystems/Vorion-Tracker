@@ -1,13 +1,22 @@
 import { NextRequest } from 'next/server';
 import { requireAuth, ok, err } from '@/lib/api';
-import { createBlockedWebsite, deleteBlockedWebsite, listBlockedWebsites, updateBlockedWebsite } from '@/lib/security';
+import { createBlockedWebsite, deleteBlockedWebsite, listBlockedWebsites, listEffectiveBlockedWebsites, updateBlockedWebsite } from '@/lib/security';
+import { canManageSecurity, normalizeRole } from '@/lib/roles';
+import { sql } from '@/lib/db';
 
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
 
   try {
-    const sites = await listBlockedWebsites(true);
+    const role = normalizeRole(user.role);
+    const sites = role === 'employee'
+      ? await (async () => {
+          const rows = await sql`SELECT email, department_id FROM public.profiles WHERE id = ${user.sub} LIMIT 1`;
+          const profile = rows?.[0];
+          return listEffectiveBlockedWebsites({ departmentId: profile?.department_id || null, employeeEmail: profile?.email || null });
+        })()
+      : await listBlockedWebsites(true);
     return ok(sites);
   } catch (e: any) {
     console.error('GET /api/blocked/websites error:', e?.message || e);
@@ -18,7 +27,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
-  if (user.role !== 'super_admin') return err('Forbidden', 403);
+  if (!canManageSecurity(normalizeRole(user.role))) return err('Forbidden', 403);
 
   try {
     const body = await req.json();
@@ -26,10 +35,14 @@ export async function POST(req: NextRequest) {
       domain: String(body?.domain || '').trim(),
       reason: body?.reason ? String(body.reason) : null,
       enabled: body?.enabled !== undefined ? Boolean(body.enabled) : true,
+      scopeType: body?.scopeType,
+      departmentId: body?.departmentId || null,
+      employeeEmail: body?.employeeEmail || null,
     });
     return ok(site, 201);
   } catch (e: any) {
     console.error('POST /api/blocked/websites error:', e?.message || e);
+    if (e?.code === '23505') return err('This website is already blocked for the selected scope', 409);
     return err(e?.message || 'Internal server error', 500);
   }
 }
@@ -37,7 +50,7 @@ export async function POST(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
-  if (user.role !== 'super_admin') return err('Forbidden', 403);
+  if (!canManageSecurity(normalizeRole(user.role))) return err('Forbidden', 403);
 
   try {
     const body = await req.json();
@@ -45,11 +58,15 @@ export async function PUT(req: NextRequest) {
       domain: body?.domain !== undefined ? String(body.domain).trim() : undefined,
       reason: body?.reason !== undefined ? (body.reason ? String(body.reason) : null) : undefined,
       enabled: body?.enabled !== undefined ? Boolean(body.enabled) : undefined,
+      scopeType: body?.scopeType !== undefined ? body.scopeType : undefined,
+      departmentId: body?.departmentId !== undefined ? body.departmentId || null : undefined,
+      employeeEmail: body?.employeeEmail !== undefined ? body.employeeEmail || null : undefined,
     });
     if (!site) return err('Website not found', 404);
     return ok(site);
   } catch (e: any) {
     console.error('PUT /api/blocked/websites error:', e?.message || e);
+    if (e?.code === '23505') return err('This website is already blocked for the selected scope', 409);
     return err(e?.message || 'Internal server error', 500);
   }
 }
@@ -57,7 +74,7 @@ export async function PUT(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
-  if (user.role !== 'super_admin') return err('Forbidden', 403);
+  if (!canManageSecurity(normalizeRole(user.role))) return err('Forbidden', 403);
 
   try {
     const { searchParams } = new URL(req.url);

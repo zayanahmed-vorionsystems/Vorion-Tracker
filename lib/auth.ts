@@ -1,7 +1,7 @@
 // lib/auth.ts
 import jwt from 'jsonwebtoken';
 import { NextRequest } from 'next/server';
-import type { Role } from './db';
+import { canManageUsers, canMonitorAll, canSendAlerts, normalizeRole, type Role } from './roles';
 
 const SECRET = process.env.JWT_SECRET!;
 
@@ -14,7 +14,8 @@ export function signToken(payload: TokenPayload): string {
 }
 
 export function verifyToken(token: string): TokenPayload {
-  return jwt.verify(token, SECRET) as TokenPayload;
+  const payload = jwt.verify(token, SECRET) as TokenPayload;
+  return { ...payload, role: normalizeRole(payload.role) };
 }
 
 export function getTokenFromRequest(req: NextRequest): TokenPayload | null {
@@ -26,11 +27,16 @@ export function getTokenFromRequest(req: NextRequest): TokenPayload | null {
 
 // ── Role levels ────────────────────────────────────────────────────────────
 const LEVELS: Record<Role, number> = {
-  super_admin: 5, admin: 5, executive: 4, qa_manager: 3, team_lead: 2, employee: 1,
+  superadmin: 7,
+  admin: 6,
+  executive: 5,
+  qa_manager: 4,
+  qa_lead: 3,
+  qa: 2,
+  client: 1,
+  employee: 0,
 };
 
 export const roleLevel    = (r: Role) => LEVELS[r] ?? 0;
-export const canMonitorAll = (r: Role) => ['super_admin','qa_manager','admin'].includes(r);
-export const canManageUsers= (r: Role) => ['super_admin','admin'].includes(r);
-export const canSendAlerts = (r: Role) => ['super_admin','qa_manager','team_lead','admin'].includes(r);
 export const isAtLeast     = (r: Role, min: Role) => roleLevel(r) >= roleLevel(min);
+export { canMonitorAll, canManageUsers, canSendAlerts };

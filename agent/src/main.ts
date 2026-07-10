@@ -896,7 +896,7 @@ async function createWindow() {
 // ─── IPC ────────────────────────────────────────────────────────────────────
 ipcMain.handle('login', async (_e, email:string, password:string) => {
   try {
-    const res = await apiRequest('POST','/api/auth',{ email, password });
+    const res = await apiRequest('POST','/api/auth',{ email, password, context: 'agent' });
     if (!res?.token) throw new Error(res?.error || 'Login failed');
 
     const nextEmployeeId = getEmployeeIdFromUser(res?.user || res?.profile || null);

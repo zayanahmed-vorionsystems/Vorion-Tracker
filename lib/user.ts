@@ -1,17 +1,13 @@
 import { PoolClient } from 'pg';
-import { sql, withTransaction, Role } from '@/lib/db';
+import { sql, withTransaction } from '@/lib/db';
 import { hasSmtpConfig, sendCredentialsEmail, sendInviteEmail, sendVerificationEmail } from '@/lib/mailer';
+import { normalizeRole, normalizeShiftType, type Role, type ShiftType } from '@/lib/roles';
+import { ensureRoleFeatureSchema } from '@/lib/schema';
 
 const redirectTo = process.env.NEXT_PUBLIC_APP_URL || undefined;
 
 export type UserStatus = 'Active' | 'Pending Verification' | 'Invited' | 'Disabled' | 'Unknown';
 
-// employee and team_lead are created with an admin-set password and receive
-// a credentials email directly (name + password) — see createEmployeeAccount.
-//
-// Every other role (super_admin, admin, qa_manager) goes through Supabase's
-// self-service "invite link" flow: no password is collected here, and the user
-// receives Supabase's invite email and sets their own password.
 export const INVITE_ROLES: Role[] = [];
 
 export class UserServiceError extends Error {
@@ -78,14 +74,55 @@ export async function ensureUserDoesNotExist(admin: any, email: string) {
   }
 }
 
-async function insertProfile(client: PoolClient, userId: string, name: string, email: string, role: Role, departmentId: string | null) {
+async function insertProfile(
+  client: PoolClient,
+  userId: string,
+  name: string,
+  email: string,
+  role: Role,
+  departmentId: string | null,
+  shiftType: ShiftType = 'full_time',
+) {
   const result = await client.query(
-    `INSERT INTO public.profiles (id, full_name, email, role, department_id)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, full_name, full_name AS name, email, role, department_id, employee_code`,
-    [userId, name, email, role, departmentId]
+    `INSERT INTO public.profiles (id, full_name, email, role, department_id, shift_type)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, full_name, full_name AS name, email, role, department_id, employee_code, shift_type`,
+    [userId, name, email, role, departmentId, shiftType]
   );
   return result.rows[0];
+}
+
+async function syncClientAssignment(client: PoolClient, employeeId: string, clientId: string | null) {
+  await client.query('DELETE FROM client_assignments WHERE employee_id = $1', [employeeId]);
+  if (!clientId) return;
+  await client.query(
+    `INSERT INTO client_assignments (client_id, employee_id)
+     VALUES ($1, $2)
+     ON CONFLICT (client_id, employee_id) DO NOTHING`,
+    [clientId, employeeId]
+  );
+}
+
+export async function getAssignedClientId(employeeId: string) {
+  await ensureRoleFeatureSchema();
+  const [row] = await sql`
+    SELECT client_id
+    FROM client_assignments
+    WHERE employee_id = ${employeeId}
+    LIMIT 1
+  `;
+  return row?.client_id || null;
+}
+
+export async function listAssignedEmployeesForClient(clientId: string) {
+  await ensureRoleFeatureSchema();
+  return await sql`
+    SELECT p.id, p.full_name AS name, p.email, p.role, p.department_id, p.employee_code, p.shift_type
+    FROM client_assignments ca
+    JOIN public.profiles p ON p.id = ca.employee_id
+    WHERE ca.client_id = ${clientId}
+    ORDER BY p.full_name
+  `;
 }
 
 /**
@@ -95,14 +132,15 @@ async function insertProfile(client: PoolClient, userId: string, name: string, e
  */
 export async function createUserAccount(admin: any, payload: { name: string; email: string; role: Role; departmentId: string | null; password: string }) {
   const email = normalizeEmail(payload.email);
-  console.log('[userService] Creating user', { email, role: payload.role });
+  const normalizedRole = normalizeRole(payload.role);
+  console.log('[userService] Creating user', { email, role: normalizedRole });
   await ensureUserDoesNotExist(admin, email);
 
   const { data, error } = await admin.auth.admin.createUser({
     email,
     password: payload.password,
     email_confirm: false,
-    user_metadata: { full_name: payload.name, role: payload.role },
+    user_metadata: { full_name: payload.name, role: normalizedRole },
   });
   if (error) {
     if (String(error?.message || '').toLowerCase().includes('already registered')) {
@@ -121,7 +159,7 @@ export async function createUserAccount(admin: any, payload: { name: string; ema
   let profile;
   try {
     profile = await withTransaction(async (client) => {
-      return await insertProfile(client, userId, payload.name, email, payload.role, payload.departmentId);
+      return await insertProfile(client, userId, payload.name, email, normalizedRole, payload.departmentId);
     });
   } catch (error) {
     try {
@@ -154,9 +192,19 @@ export async function createUserAccount(admin: any, payload: { name: string; ema
   return { profile, status: 'Pending Verification' as const, emailSent };
 }
 
-export async function createEmployeeAccount(admin: any, payload: { name: string; email: string; role: Role; departmentId: string | null; password: string }) {
+export async function createEmployeeAccount(admin: any, payload: {
+  name: string;
+  email: string;
+  role: Role;
+  departmentId: string | null;
+  password: string;
+  shiftType?: ShiftType | null;
+  clientId?: string | null;
+}) {
   const email = normalizeEmail(payload.email);
-  console.log('[userService] Creating account via Supabase invite + admin-set password', { email, role: payload.role });
+  const normalizedRole = normalizeRole(payload.role);
+  const normalizedShiftType = normalizeShiftType(payload.shiftType);
+  console.log('[userService] Creating account via Supabase invite + admin-set password', { email, role: normalizedRole });
   await ensureUserDoesNotExist(admin, email);
 
   // Step 1: inviteUserByEmail creates the user AND triggers Supabase's own
@@ -165,7 +213,7 @@ export async function createEmployeeAccount(admin: any, payload: { name: string;
   // {{ .Data.temp_password }}.
   const { data, error } = await admin.auth.admin.inviteUserByEmail(email, {
     redirectTo,
-    data: { full_name: payload.name, role: payload.role, temp_password: payload.password },
+    data: { full_name: payload.name, role: normalizedRole, temp_password: payload.password },
   });
   if (error) {
     const message = String(error?.message || '').toLowerCase();
@@ -205,7 +253,11 @@ export async function createEmployeeAccount(admin: any, payload: { name: string;
   let profile;
   try {
     profile = await withTransaction(async (client) => {
-      return await insertProfile(client, userId, payload.name, email, payload.role, payload.departmentId);
+      const createdProfile = await insertProfile(client, userId, payload.name, email, normalizedRole, payload.departmentId, normalizedShiftType);
+      if (normalizedRole === 'employee') {
+        await syncClientAssignment(client, userId, payload.clientId || null);
+      }
+      return createdProfile;
     });
   } catch (error) {
     try {
@@ -221,6 +273,7 @@ export async function createEmployeeAccount(admin: any, payload: { name: string;
 }
 export async function inviteUserAccount(admin: any, payload: { name: string; email: string; role: Role; departmentId: string | null }) {
   const email = normalizeEmail(payload.email);
+  const normalizedRole = normalizeRole(payload.role);
   await ensureUserDoesNotExist(admin, email);
 
   let authUser: any = null;
@@ -289,7 +342,7 @@ export async function inviteUserAccount(admin: any, payload: { name: string; ema
 
   try {
     const profile = await withTransaction(async (client) => {
-      return await insertProfile(client, userId, payload.name, email, payload.role, payload.departmentId);
+      return await insertProfile(client, userId, payload.name, email, normalizedRole, payload.departmentId);
     });
 
     const inviteUrl = typeof redirectTo === 'string' && redirectTo
@@ -298,7 +351,7 @@ export async function inviteUserAccount(admin: any, payload: { name: string; ema
 
     try {
       if (hasSmtpConfig()) {
-        await sendInviteEmail({ to: email, name: payload.name, role: payload.role, actionUrl: inviteUrl });
+        await sendInviteEmail({ to: email, name: payload.name, role: normalizedRole, actionUrl: inviteUrl });
       } else if (typeof admin.auth.admin.inviteUserByEmail === 'function') {
         const { error } = await admin.auth.admin.inviteUserByEmail(email, { redirectTo });
         if (error) throw error;
@@ -435,8 +488,10 @@ export async function deleteUserAndProfile(admin: any, id: string) {
     await client.query('DELETE FROM app_activity WHERE employee_id = $1', [id]);
     await client.query('DELETE FROM website_activity WHERE employee_id = $1', [id]);
     await client.query('DELETE FROM screenshots WHERE employee_id = $1', [id]);
+    await client.query('DELETE FROM screenshot_flags WHERE employee_id = $1 OR flagged_by = $1', [id]);
     await client.query('DELETE FROM recordings WHERE employee_id = $1', [id]);
     await client.query('DELETE FROM employee_status WHERE employee_id = $1', [id]);
+    await client.query('DELETE FROM client_assignments WHERE employee_id = $1 OR client_id = $1', [id]);
     await client.query(
       `DELETE FROM breaks WHERE attendance_id IN (
          SELECT id FROM attendance WHERE employee_id = $1

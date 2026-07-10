@@ -1,5 +1,6 @@
 // lib/db.ts
 import { Pool, PoolClient } from 'pg';
+import type { Role, ShiftType } from './roles';
 
 function stripQuotes(value: string): string {
   const trimmed = value.trim();
@@ -53,14 +54,6 @@ export const sql: any = async (strings: TemplateStringsArray, ...values: any[]) 
 };
 
 // ── Type helpers ──────────────────────────────────────────────────────────
-export type Role =
-  | 'super_admin'
-  | 'admin'
-  | 'executive'
-  | 'qa_manager'
-  | 'team_lead'
-  | 'employee';
-
 // Matches public.profiles exactly
 export interface User {
   id:            string;
@@ -69,6 +62,7 @@ export interface User {
   role:          Role;
   department_id: string | null; // was: team_id
   employee_code: string | null;
+  shift_type?:   ShiftType | null;
   created_at:    string;
   updated_at:    string;
 }

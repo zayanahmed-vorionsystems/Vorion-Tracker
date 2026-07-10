@@ -1,13 +1,25 @@
 import { NextRequest } from 'next/server';
 import { requireAuth, ok, err } from '@/lib/api';
-import { getPolicySettings } from '@/lib/security';
+import { getEffectivePolicyForEmployee } from '@/lib/security';
+import { sql } from '@/lib/db';
 
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
 
   try {
-    const policy = await getPolicySettings();
+    const rows = await sql`
+      SELECT email, department_id
+      FROM public.profiles
+      WHERE id = ${user.sub}
+      LIMIT 1
+    `;
+    const profile = rows?.[0];
+    const policy = await getEffectivePolicyForEmployee({
+      employeeId: user.sub,
+      employeeEmail: profile?.email || null,
+      departmentId: profile?.department_id || null,
+    });
     return ok({
       blockApps: policy.blockApps,
       blockWebsites: policy.blockWebsites,

@@ -191,3 +191,28 @@ export async function sendVerificationEmail(opts: {
   });
   console.log('[mailer] verification email accepted', { to, messageId: info?.messageId });
 }
+
+export async function sendScreenshotFlagReportEmail(opts: {
+  to: string[];
+  cc?: string[];
+  subject: string;
+  html: string;
+  text: string;
+  attachments?: Array<{ filename: string; path?: string; content?: Buffer }>;
+}) {
+  const t = getTransporter();
+  const info = await t.sendMail({
+    from: `"${SMTP_FROM_NAME}" <${SMTP_FROM_EMAIL}>`,
+    to: opts.to.join(', '),
+    cc: opts.cc?.length ? opts.cc.join(', ') : undefined,
+    subject: opts.subject,
+    html: opts.html,
+    text: opts.text,
+    attachments: opts.attachments,
+  });
+  console.log('[mailer] screenshot flag email accepted', {
+    to: opts.to,
+    cc: opts.cc || [],
+    messageId: info?.messageId,
+  });
+}

@@ -28,3 +28,15 @@ select,
 textarea {
   font-family: inherit;
 }
+
+select {
+  background-color: #1b2437;
+  color: #f5f7fa;
+  color-scheme: dark;
+}
+
+select option,
+select optgroup {
+  background-color: #1b2437;
+  color: #f5f7fa;
+}

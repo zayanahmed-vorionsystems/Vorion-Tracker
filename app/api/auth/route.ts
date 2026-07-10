@@ -3,6 +3,7 @@ import { sql } from '@/lib/db';
 import { assertSupabaseAdmin } from '@/lib/supabase';
 import { signToken } from '@/lib/auth';
 import { requireAuth, ok, err } from '@/lib/api';
+import { canAccessWebApp, normalizeRole } from '@/lib/roles';
 
 // This route depends on runtime env/DB state — never statically evaluate it.
 export const dynamic = 'force-dynamic';
@@ -72,7 +73,7 @@ export async function GET(req: NextRequest) {
         id:            profile.id,
         email:         profile.email,
         full_name:     profile.full_name,
-        role:          profile.role,
+        role:          normalizeRole(profile.role),
         department_id: profile.department_id,
         employee_code: profile.employee_code,
         name:          profile.full_name,
@@ -146,13 +147,14 @@ export async function POST(req: NextRequest) {
 
   if (!profile) return err('Profile not found', 404);
 
+  profile.role = normalizeRole(profile.role);
   console.log('[auth:login] Successful password check', { email, role: profile.role, context: loginContext });
 
-  if (profile.role === 'employee') {
-    if (loginContext === 'web') {
-      return err('Employees can only sign in using the Desktop Agent.', 403);
-    }
-  } else if (loginContext === 'agent') {
+  if (loginContext === 'web' && !canAccessWebApp(profile.role)) {
+    return err('You are not allowed to use the web app. Please sign in using the Desktop Agent.', 403);
+  }
+
+  if (profile.role !== 'employee' && loginContext === 'agent') {
     return err('This account is only allowed to use the Web Dashboard.', 403);
   }
 

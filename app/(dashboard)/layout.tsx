@@ -3,7 +3,15 @@
 import { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { useAuthStore, canMonitorAll, canManageUsers, type Role } from '@/store/auth';
+import {
+  useAuthStore,
+  canManageSecurityPolicies,
+  canManageUsers,
+  canMonitorAll,
+  canViewFlags,
+  getRoleLabel,
+  type Role,
+} from '@/store/auth';
 import Image from 'next/image';
 import vorionLogo from '@/public/vorion-logo-dark.png';
 
@@ -23,15 +31,14 @@ const BRAND = {
 };
 
 const ROLE_COLOR: Record<Role, string> = {
-  super_admin: BRAND.blue,
+  superadmin: BRAND.blue,
   admin: '#5B7FE8',
+  executive: '#E879F9',
+  client: '#F97316',
   qa_manager: '#2FBF8F',
-  team_lead: BRAND.yellow,
+  qa_lead: BRAND.yellow,
+  qa: '#60A5FA',
   employee: BRAND.muted,
-};
-const ROLE_LABEL: Record<Role, string> = {
-  super_admin: 'Super Admin', admin: 'Admin', qa_manager: 'QA Manager',
-  team_lead: 'Team Lead', employee: 'Employee',
 };
 
 const NavItem = ({ href, label, show = true }: { href: string; label: string; show?: boolean }) => {
@@ -95,6 +102,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [hasHydrated, logout, router, token, user]);
 
   if (!hasHydrated || !user || !token) return null;
+  const isClient = role === 'client';
 
   return (
     <div style={{
@@ -139,21 +147,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           border: `1px solid ${ROLE_COLOR[role]}40`,
           letterSpacing: '0.06em', textTransform: 'uppercase',
         }}>
-          {ROLE_LABEL[role]}
+          {getRoleLabel(role)}
         </div>
 
         {/* Nav */}
         <nav style={{ flex: 1 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: BRAND.mutedFaint, padding: '4px 12px 8px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Monitor</div>
           <NavItem href="/dashboard"   label="Dashboard" />
-          <NavItem href="/live"        label="Live Monitor"   show={canMonitorAll(role) || role === 'team_lead'} />
+          <NavItem href="/live"        label="Live Monitor"   show={canMonitorAll(role)} />
           <NavItem href="/screenshots" label="Screenshots" />
           <NavItem href="/timeline"    label="Timeline" />
+          <NavItem href="/flags"       label="Flagged Screenshots" show={canViewFlags(role)} />
           <div style={{ fontSize: 10, fontWeight: 700, color: BRAND.mutedFaint, padding: '18px 12px 8px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Reports</div>
-          <NavItem href="/reports"     label="Reports" />
-          <NavItem href="/security"    label="Security Policies" show={canManageUsers(role)} />
+          <NavItem href="/reports"     label="Reports" show={!isClient} />
+          <NavItem href="/security"    label="Security Policies" show={canManageSecurityPolicies(role)} />
+          <NavItem href="/departments" label="Department Management" show={canManageUsers(role)} />
           <NavItem href="/users"       label="User Management" show={canManageUsers(role)} />
-          <NavItem href="/download"    label="Download Agent" show={role === 'super_admin'} />
+          <NavItem href="/download"    label="Download Agent" show={role === 'superadmin' || role === 'admin'} />
         </nav>
 
         {/* User footer */}

@@ -1,13 +1,15 @@
 import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
-import { requireRole, err, ok } from '@/lib/api';
+import { requireAuth, err, ok } from '@/lib/api';
 import { createLiveKitToken, getLiveKitRoomName } from '@/lib/livekit';
+import { canAccessLiveMonitor, normalizeRole } from '@/lib/roles';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
-  const user = requireRole(req, 'super_admin', 'admin', 'qa_manager', 'team_lead', 'executive');
+  const user = requireAuth(req);
   if ('status' in user) return user;
+  if (!canAccessLiveMonitor(normalizeRole(user.role))) return err('Forbidden', 403);
 
   const { employeeId } = await req.json();
   if (!employeeId) return err('employeeId is required', 400);
@@ -18,10 +20,6 @@ export async function POST(req: NextRequest) {
     JOIN public.profiles p ON p.id = a.employee_id
     WHERE a.employee_id = ${employeeId}
       AND a.check_out IS NULL
-      AND (
-        ${user.role} != 'team_lead'
-        OR p.department_id = ${user.teamId}
-      )
     ORDER BY a.check_in DESC
     LIMIT 1
   `;

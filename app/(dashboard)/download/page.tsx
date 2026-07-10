@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth';
+import { normalizeRole } from '@/lib/roles';
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://your-app.vercel.app';
 const agentDownloadUrls = {
@@ -126,19 +127,20 @@ export default function DownloadPage() {
   const { user } = useAuthStore();
   const router = useRouter();
   const [copied, setCopied] = useState<string | null>(null);
+  const normalizedRole = normalizeRole(user?.role);
 
   useEffect(() => {
-    if (user && user.role !== 'super_admin') {
+    if (user && !['superadmin', 'admin'].includes(normalizedRole)) {
       router.replace('/dashboard');
     }
-  }, [router, user]);
+  }, [normalizedRole, router, user]);
 
   if (!user) return null;
-  if (user.role !== 'super_admin') {
+  if (!['superadmin', 'admin'].includes(normalizedRole)) {
     return (
       <div style={{ maxWidth: 640, padding: 24, borderRadius: 18, background: 'rgba(11,15,26,.7)', border: '1px solid rgba(248,250,252,.08)' }}>
         <h1 style={{ fontSize: 24, fontWeight: 700, color: '#F8FAFC', marginBottom: 8 }}>Access restricted</h1>
-        <p style={{ fontSize: 14, color: 'rgba(248,250,252,.6)', margin: 0 }}>Only super admins can download and distribute the agent installer.</p>
+        <p style={{ fontSize: 14, color: 'rgba(248,250,252,.6)', margin: 0 }}>Only super admins and admins can download and distribute the agent installer.</p>
       </div>
     );
   }

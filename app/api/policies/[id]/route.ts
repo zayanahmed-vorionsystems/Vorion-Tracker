@@ -5,7 +5,7 @@ import { updatePolicySettings } from '@/lib/security';
 export async function PUT(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
-  if (user.role !== 'super_admin') return err('Forbidden', 403);
+  if (user.role !== 'superadmin') return err('Forbidden', 403);
 
   try {
     const body = await req.json();

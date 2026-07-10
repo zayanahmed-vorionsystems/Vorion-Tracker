@@ -8,7 +8,7 @@ export const revalidate = 0;
 
 export async function GET(req: NextRequest) {
   // require a privileged role to run diagnostics
-  const auth = requireRole(req, 'super_admin', 'admin');
+  const auth = requireRole(req, 'superadmin', 'admin');
   if ('status' in auth) return auth;
 
   let admin;

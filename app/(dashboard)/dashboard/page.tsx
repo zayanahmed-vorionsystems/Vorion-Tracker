@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useAuthStore } from '@/store/auth';
 import { supabaseClient } from '@/lib/supabase';
 import { fmtCompact, fmtPrecise, timeAgo } from './timeUtils';
+import { normalizeRole } from '@/lib/roles';
 
 function fmt(secs: number) {
   if (!secs) return '0h 0m';
@@ -158,6 +159,10 @@ radial-gradient(circle at bottom right,${BRAND.yellowSoft} 0%,transparent 40%)
 
 export default function DashboardPage() {
   const { token, user } = useAuthStore();
+  const role = normalizeRole(user?.role);
+  const clientTimeZone = typeof window === 'undefined'
+    ? 'America/New_York'
+    : Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
   const [rows,       setRows]       = useState<any[]>([]);
   const [date,       setDate]       = useState(new Date().toISOString().slice(0, 10));
   const [loading,    setLoading]    = useState(true);
@@ -199,7 +204,9 @@ export default function DashboardPage() {
   // ── Fetch logic extracted into a stable callback ──────────────────────
   const fetchData = useCallback(() => {
     if (!token) return;
-    fetch(`/api/reports?type=daily&date=${date}`, {
+    const params = new URLSearchParams({ type: 'daily', date });
+    if (role === 'client') params.set('tz', clientTimeZone);
+    fetch(`/api/reports?${params.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(async r => {
@@ -228,7 +235,7 @@ export default function DashboardPage() {
         setRows([]);
         setLoading(false);
       });
-  }, [date, token, normalizeStatus]);
+  }, [clientTimeZone, date, role, token, normalizeStatus]);
 
   // Initial fetch whenever date or token changes
   useEffect(() => {
@@ -301,13 +308,20 @@ export default function DashboardPage() {
 
   return (
     <div style={styles.page}>
+      <>
       {/* Top row */}
       <div style={styles.topRow}>
         <div>
           <h1 style={{ fontSize: 30, fontWeight: 800, margin: 0, color: BRAND.white }}>
-            Here's what's happening today, <span style={{ color: BRAND.yellow }}>{user?.name}</span>
+            {role === 'client'
+              ? <>Assigned VAs for <span style={{ color: BRAND.yellow }}>{user?.name}</span></>
+              : <>Here&apos;s what&apos;s happening today, <span style={{ color: BRAND.yellow }}>{user?.name}</span></>}
           </h1>
-          <p style={styles.subtext}>Welcome back — here's your team overview</p>
+          <p style={styles.subtext}>
+            {role === 'client'
+              ? 'Review the assigned VA activity below.'
+              : "Welcome back — here's your team overview"}
+          </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input
@@ -385,7 +399,7 @@ export default function DashboardPage() {
       {/* Table card */}
       <div style={styles.tableCard}>
         <div style={styles.tableHeader}>
-          <span>Employee Summary — {date}</span>
+          <span>{role === 'client' ? `Assigned VA Summary — ${date}` : `Employee Summary — ${date}`}</span>
           {lastSynced && (
             <span style={{ fontSize: 11, color: BRAND.mutedFaint, fontWeight: 400 }}>
               Last synced: {lastSynced.toLocaleTimeString()} · auto-refreshes every 60s
@@ -499,6 +513,7 @@ export default function DashboardPage() {
           </table>
         )}
       </div>
+      </>
     </div>
   );
 }

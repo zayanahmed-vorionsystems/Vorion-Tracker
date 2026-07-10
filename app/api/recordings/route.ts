@@ -4,6 +4,7 @@ import { sql } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
 import { assertSupabaseAdmin } from '@/lib/supabase';
 import { emitSocketEvent } from '@/lib/socket';
+import { canMonitorAll, normalizeRole } from '@/lib/roles';
 
 const MAX_RECORDING_BYTES = 100 * 1024 * 1024;
 
@@ -80,47 +81,23 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
+  const role = normalizeRole(user.role);
 
   const { searchParams } = new URL(req.url);
   const filterUserId = searchParams.get('userId');
   const limit = parseInt(searchParams.get('limit') || '60');
 
   let rows;
-  if (user.role === 'employee') {
+  if (role === 'employee') {
     rows = await sql`
       SELECT r.*, p.full_name AS user_name
       FROM recordings r
       JOIN public.profiles p ON p.id = r.user_id
       WHERE r.user_id = ${user.sub}
       ORDER BY r.captured_at DESC
-      LIMIT ${limit}
-    `;
-  } else if (user.role === 'team_lead') {
-    if (filterUserId) {
-      rows = await sql`
-        SELECT r.*, p.full_name AS user_name
-        FROM recordings r
-        JOIN public.profiles p ON p.id = r.user_id
-        WHERE p.department_id = (
-          SELECT department_id FROM public.profiles WHERE id = ${user.sub}
-        )
-        AND r.user_id = ${filterUserId}
-        ORDER BY r.captured_at DESC
         LIMIT ${limit}
       `;
-    } else {
-      rows = await sql`
-        SELECT r.*, p.full_name AS user_name
-        FROM recordings r
-        JOIN public.profiles p ON p.id = r.user_id
-        WHERE p.department_id = (
-          SELECT department_id FROM public.profiles WHERE id = ${user.sub}
-        )
-        ORDER BY r.captured_at DESC
-        LIMIT ${limit}
-      `;
-    }
-  } else if (filterUserId) {
+  } else if (canMonitorAll(role) && filterUserId) {
     rows = await sql`
       SELECT r.*, p.full_name AS user_name
       FROM recordings r
@@ -129,7 +106,7 @@ export async function GET(req: NextRequest) {
       ORDER BY r.captured_at DESC
       LIMIT ${limit}
     `;
-  } else {
+  } else if (canMonitorAll(role)) {
     rows = await sql`
       SELECT r.*, p.full_name AS user_name
       FROM recordings r
@@ -137,6 +114,8 @@ export async function GET(req: NextRequest) {
       ORDER BY r.captured_at DESC
       LIMIT ${limit}
     `;
+  } else {
+    return err('Forbidden', 403);
   }
 
   return ok(rows);

@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export async function POST(req: NextRequest) {
-  const auth = requireRole(req, 'super_admin', 'admin');
+  const auth = requireRole(req, 'superadmin', 'admin');
   if ('status' in auth) return auth;
 
   let admin;

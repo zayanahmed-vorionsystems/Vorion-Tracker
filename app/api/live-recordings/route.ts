@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { supabaseAdmin } from '@/lib/supabase';
 import { requireAuth, ok, err } from '@/lib/api';
+import { canAccessLiveMonitor, normalizeRole } from '@/lib/roles';
 
 const MAX_RECORDING_BYTES = 100 * 1024 * 1024;
 
@@ -11,20 +12,14 @@ function isAllowedRecordingType(type: string) {
 }
 
 async function canManageLiveRecording(user: any, employeeId: string) {
-  if (['super_admin', 'admin', 'qa_manager'].includes(user.role)) return true;
-  if (user.role !== 'team_lead') return false;
-
+  if (!canAccessLiveMonitor(normalizeRole(user.role))) return false;
   const rows = await sql`
     SELECT 1
-    FROM public.profiles lead
-    JOIN public.profiles employee
-      ON employee.id = ${employeeId}
-     AND employee.department_id = lead.department_id
-    WHERE lead.id = ${user.sub}
-      AND lead.department_id IS NOT NULL
+    FROM public.profiles employee
+    WHERE employee.id = ${employeeId}
+      AND employee.role = 'employee'
     LIMIT 1
   `;
-
   return rows.length > 0;
 }
 

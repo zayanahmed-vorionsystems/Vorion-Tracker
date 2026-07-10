@@ -2,8 +2,17 @@
 // store/auth.ts
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-
-export type Role = 'super_admin'|'admin'|'qa_manager'|'team_lead'|'employee';
+import {
+  canManageSecurity,
+  canManageUsers as canManageUsersByRole,
+  canMonitorAll as canMonitorAllByRole,
+  canSendAlerts as canSendAlertsByRole,
+  canViewFlags as canViewFlagsByRole,
+  normalizeRole,
+  roleLabel,
+  type Role,
+} from '@/lib/roles';
+export type { Role } from '@/lib/roles';
 
 export interface AuthUser { id:string; name:string; email:string; role:Role; teamId:string|null; }
 
@@ -21,9 +30,7 @@ export const useAuthStore = create<AuthState>()(
       user: null,
       hasHydrated: false,
       setAuth: (token, user) => {
-        // Normalize role casing to avoid case-sensitive mismatches from DB
-        const normalizedRole = (user?.role && String(user.role).toLowerCase()) as any;
-        const normalizedUser = user ? { ...user, role: normalizedRole } : null;
+        const normalizedUser = user ? { ...user, role: normalizeRole(user.role) } : null;
         set({ token, user: normalizedUser });
       },
       logout: () => set({ token: null, user: null }),
@@ -43,8 +50,11 @@ export const useAuthStore = create<AuthState>()(
   )
 );
 
-const LEVELS: Record<Role,number> = { super_admin:5,admin:5,qa_manager:4,team_lead:3,employee:1 };
-export const canMonitorAll  = (r:Role) => ['super_admin','qa_manager','admin'].includes(r);
-export const canManageUsers = (r:Role) => ['super_admin','admin'].includes(r);
-export const canSendAlerts  = (r:Role) => ['super_admin','qa_manager','team_lead','admin'].includes(r);
+const LEVELS: Record<Role,number> = { superadmin:7, admin:6, executive:5, qa_manager:4, qa_lead:3, qa:2, client:1, employee:0 };
+export const canMonitorAll  = (r:Role) => canMonitorAllByRole(r);
+export const canManageUsers = (r:Role) => canManageUsersByRole(r);
+export const canSendAlerts  = (r:Role) => canSendAlertsByRole(r);
+export const canManageSecurityPolicies = (r: Role) => canManageSecurity(r);
+export const canViewFlags = (r: Role) => canViewFlagsByRole(r);
+export const getRoleLabel = (r: Role) => roleLabel(r);
 export const isAtLeast      = (r:Role,min:Role) => LEVELS[r]>=LEVELS[min];

@@ -3,9 +3,22 @@ import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { assertSupabaseAdmin } from '@/lib/supabase';
 import { requireAuth, requireRole, ok, err } from '@/lib/api';
-import { canManageUsers } from '@/lib/auth';
-import { createEmployeeAccount, deleteUserAndProfile, deriveStatusFromAuthUser, UserServiceError } from '@/lib/user';
-import type { Role } from '@/lib/db';
+import {
+  canManageUsers,
+  canMonitorAll,
+  canDeleteRecords,
+  normalizeRole,
+  normalizeShiftType,
+  type Role,
+} from '@/lib/roles';
+import {
+  createEmployeeAccount,
+  deleteUserAndProfile,
+  deriveStatusFromAuthUser,
+  getAssignedClientId,
+  listAssignedEmployeesForClient,
+  UserServiceError,
+} from '@/lib/user';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
@@ -13,14 +26,12 @@ export async function GET(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
 
-  const { role, sub } = user;
-  if (['qa_manager', 'team_lead', 'employee'].includes(role)) {
-    return err('Forbidden', 403);
-  }
+  const role = normalizeRole(user.role);
+  const { sub } = user;
 
   let rows;
 
-  if (['super_admin', 'admin'].includes(role)) {
+  if (canManageUsers(role)) {
     rows = await sql`
       SELECT
         p.id,
@@ -30,25 +41,34 @@ export async function GET(req: NextRequest) {
         p.role,
         p.department_id,
         p.employee_code,
+        p.shift_type,
         p.created_at,
-        d.name AS department_name
+        d.name AS department_name,
+        ca.client_id AS assigned_client_id
       FROM public.profiles p
       LEFT JOIN departments d ON d.id = p.department_id
+      LEFT JOIN client_assignments ca ON ca.employee_id = p.id
+      ORDER BY p.full_name
+    `;
+  } else if (role === 'client') {
+    rows = await listAssignedEmployeesForClient(sub);
+  } else if (canMonitorAll(role)) {
+    rows = await sql`
+      SELECT
+        p.id,
+        p.full_name,
+        p.full_name AS name,
+        p.email,
+        p.role,
+        p.department_id,
+        p.employee_code,
+        p.shift_type
+      FROM public.profiles p
+      WHERE p.role = 'employee'
       ORDER BY p.full_name
     `;
   } else {
-    rows = await sql`
-      SELECT
-        id,
-        full_name,
-        full_name AS name,
-        email,
-        role,
-        department_id,
-        employee_code
-      FROM public.profiles
-      WHERE id = ${sub}
-    `;
+    return err('Forbidden', 403);
   }
 
   // Enrich rows with auth status (Active / Invited / Pending Verification / Disabled).
@@ -86,14 +106,15 @@ export async function GET(req: NextRequest) {
     }
 
     const enriched = rows.map((r: any) => {
+      const normalizedRowRole = normalizeRole(r.role);
       const authUser = authUsersById.get(r.id);
       if (!authUser) {
-        const fallbackStatus = ['super_admin', 'admin', 'qa_manager'].includes(r.role)
+        const fallbackStatus = ['superadmin', 'admin', 'executive', 'client', 'qa_manager', 'qa_lead', 'qa'].includes(normalizedRowRole)
           ? 'Invited'
           : 'Pending Verification';
-        return { ...r, status: fallbackStatus };
+        return { ...r, role: normalizedRowRole, status: fallbackStatus };
       }
-      return { ...r, status: deriveStatusFromAuthUser(authUser) };
+      return { ...r, role: normalizedRowRole, status: deriveStatusFromAuthUser(authUser) };
     });
 
     return ok(enriched);
@@ -106,7 +127,7 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const authUser = requireAuth(req);
   if ('status' in authUser) return authUser;
-  if (!['super_admin', 'admin'].includes(authUser.role)) return err('Forbidden', 403);
+  if (!canManageUsers(normalizeRole(authUser.role))) return err('Forbidden', 403);
 
   let admin;
   try {
@@ -116,34 +137,53 @@ export async function POST(req: NextRequest) {
     return err(e?.message || 'Server misconfigured: Supabase admin unavailable', 500);
   }
 
-  const { name, email: rawEmail, role, departmentId, password } = await req.json();
+  const { name, email: rawEmail, role, departmentId, password, shiftType, clientId } = await req.json();
   const email = String(rawEmail || '').trim().toLowerCase();
-  if (!name || !email || !role) {
+  const normalizedRole = normalizeRole(role);
+  const normalizedShiftType = normalizeShiftType(shiftType);
+  if (!name || !email || !normalizedRole) {
     return err('name, email and role are required');
   }
 
-  const allowedRoles = ['super_admin', 'admin', 'qa_manager', 'team_lead', 'employee'];
-  if (!allowedRoles.includes(role)) {
+  const allowedRoles: Role[] = ['superadmin', 'admin', 'executive', 'client', 'qa_manager', 'qa_lead', 'qa', 'employee'];
+  if (!allowedRoles.includes(normalizedRole)) {
     return err('Invalid role', 400);
   }
 
-  if (authUser.role === 'admin' && role === 'super_admin') {
+  if (normalizeRole(authUser.role) === 'admin' && normalizedRole === 'superadmin') {
     return err('Admins cannot create a super admin account.', 403);
   }
 
-  if (role === 'super_admin') {
-    const existingSuperAdmins = await sql`SELECT id FROM public.profiles WHERE role = 'super_admin' LIMIT 1`;
+  if (normalizedRole === 'superadmin') {
+    const existingSuperAdmins = await sql`SELECT id FROM public.profiles WHERE role = 'superadmin' LIMIT 1`;
     if (existingSuperAdmins.length > 0) {
       return err('Only one super admin account is allowed.', 403);
     }
   }
 
+  if (normalizedRole !== 'employee' && clientId) {
+    return err('Only employee accounts can be assigned to a client.', 400);
+  }
+
   const safeDeptId =
     departmentId && String(departmentId).trim() !== '' ? departmentId : null;
+  const safeClientId =
+    clientId && String(clientId).trim() !== '' ? String(clientId).trim() : null;
 
-  console.log('[users:POST] create request', { email, role, departmentId: safeDeptId });
+  if (normalizedRole === 'employee' && !safeDeptId) {
+    return err('Department is required for employee accounts', 400);
+  }
 
-  const payload = { name, email, role: role as Role, departmentId: safeDeptId };
+  console.log('[users:POST] create request', { email, role: normalizedRole, departmentId: safeDeptId, clientId: safeClientId, shiftType: normalizedShiftType });
+
+  const payload = {
+    name,
+    email,
+    role: normalizedRole,
+    departmentId: safeDeptId,
+    shiftType: normalizedShiftType,
+    clientId: safeClientId,
+  };
 
   try {
     if (!password || typeof password !== 'string' || password.length < 8) {
@@ -164,7 +204,7 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const authUser = requireAuth(req);
   if ('status' in authUser) return authUser;
-  if (authUser.role !== 'super_admin') return err('Forbidden', 403);
+  if (!canDeleteRecords(normalizeRole(authUser.role))) return err('Forbidden', 403);
 
   let admin;
   try {
@@ -179,7 +219,7 @@ export async function DELETE(req: NextRequest) {
   if (authUser.sub === id) return err('You cannot delete your own account.', 403);
 
   const [targetUser] = await sql`SELECT role FROM public.profiles WHERE id = ${id} LIMIT 1`;
-  if (targetUser?.role === 'super_admin') {
+  if (normalizeRole(targetUser?.role) === 'superadmin') {
     return err('The super admin account cannot be deleted.', 403);
   }
 
@@ -196,6 +236,7 @@ export async function DELETE(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const authUser = requireAuth(req);
   if ('status' in authUser) return authUser;
+  const actorRole = normalizeRole(authUser.role);
 
   let admin;
   try {
@@ -206,25 +247,28 @@ export async function PATCH(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { id, name, email: rawEmail, role, departmentId, password, disabled } = body;
+  const { id, name, email: rawEmail, role, departmentId, password, disabled, shiftType, clientId } = body;
   if (!id) return err('User id is required', 400);
 
   // Allow if the requester can manage users, or if they're editing their own profile
-  const isAdmin = canManageUsers(authUser.role);
+  const isAdmin = canManageUsers(actorRole);
   const isSelf = authUser.sub === id;
   if (!isAdmin && !isSelf) return err('Forbidden', 403);
-  if (authUser.role === 'admin') {
+  if (actorRole === 'admin') {
     const [targetUser] = await sql`SELECT role FROM public.profiles WHERE id = ${id} LIMIT 1`;
-    if (targetUser?.role === 'super_admin') return err('Admins cannot modify a super admin account.', 403);
+    if (normalizeRole(targetUser?.role) === 'superadmin') return err('Admins cannot modify a super admin account.', 403);
   }
 
+  const nextRole = role === undefined ? undefined : normalizeRole(role);
+  const nextShiftType = shiftType === undefined ? undefined : normalizeShiftType(shiftType);
+
   if (role !== undefined) {
-    if (authUser.role === 'admin' && role === 'super_admin') {
+    if (actorRole === 'admin' && nextRole === 'superadmin') {
       return err('Admins cannot create a super admin account.', 403);
     }
 
-    if (role === 'super_admin') {
-      const existingSuperAdmins = await sql`SELECT id FROM public.profiles WHERE role = 'super_admin' AND id != ${id} LIMIT 1`;
+    if (nextRole === 'superadmin') {
+      const existingSuperAdmins = await sql`SELECT id FROM public.profiles WHERE role = 'superadmin' AND id != ${id} LIMIT 1`;
       if (existingSuperAdmins.length > 0) {
         return err('Only one super admin account is allowed.', 403);
       }
@@ -238,9 +282,26 @@ export async function PATCH(req: NextRequest) {
       : departmentId && String(departmentId).trim() !== ''
       ? departmentId
       : null;
+  const safeClientId =
+    clientId === undefined
+      ? undefined
+      : clientId && String(clientId).trim() !== ''
+      ? String(clientId).trim()
+      : null;
+
+  const currentUserRows = await sql`SELECT role, department_id FROM public.profiles WHERE id = ${id} LIMIT 1`;
+  const currentUser = currentUserRows?.[0];
+  const resolvedRoleForValidation = nextRole !== undefined ? nextRole : normalizeRole(currentUser?.role);
+  const resolvedDeptForValidation = safeDeptId !== undefined ? safeDeptId : currentUser?.department_id ?? null;
+
+  if (resolvedRoleForValidation === 'employee' && !resolvedDeptForValidation) {
+    return err('Department is required for employee accounts', 400);
+  }
 
   if (!isAdmin && role !== undefined) return err('Forbidden', 403);
   if (!isAdmin && departmentId !== undefined) return err('Forbidden', 403);
+  if (!isAdmin && clientId !== undefined) return err('Forbidden', 403);
+  if (!isAdmin && shiftType !== undefined) return err('Forbidden', 403);
 
   const authPayload: Record<string, unknown> = {};
   if (email !== undefined) authPayload.email = email;
@@ -304,16 +365,31 @@ export async function PATCH(req: NextRequest) {
       SET
         full_name     = COALESCE(${name},            full_name),
         email         = COALESCE(${email},           email),
-        role          = COALESCE(${role as Role},    role),
+        role          = COALESCE(${nextRole as Role},    role),
         department_id = COALESCE(${safeDeptId},      department_id),
+        shift_type    = COALESCE(${nextShiftType},   shift_type),
         updated_at    = NOW()
       WHERE id = ${id}
     `;
+
+    if (safeClientId !== undefined || nextRole === 'employee' || (role === undefined && clientId !== undefined)) {
+      await sql`DELETE FROM client_assignments WHERE employee_id = ${id}`;
+      const resolvedRole = nextRole !== undefined
+        ? nextRole
+        : normalizeRole((await sql`SELECT role FROM public.profiles WHERE id = ${id} LIMIT 1`)[0]?.role);
+      if (resolvedRole === 'employee' && safeClientId) {
+        await sql`
+          INSERT INTO client_assignments (client_id, employee_id)
+          VALUES (${safeClientId}, ${id})
+          ON CONFLICT (client_id, employee_id) DO NOTHING
+        `;
+      }
+    }
   } catch (e: any) {
     console.error('Update profile error:', e);
     if (e.code === '23505') return err('Email already exists', 409);
     return err('Failed to update user profile', 500);
   }
 
-  return ok({ ok: true });
+  return ok({ ok: true, assignedClientId: safeClientId ?? (await getAssignedClientId(id)) });
 }

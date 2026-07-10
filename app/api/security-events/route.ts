@@ -2,23 +2,24 @@ import { NextRequest } from 'next/server';
 import { requireAuth, ok, err } from '@/lib/api';
 import { createSecurityEvent, listSecurityEvents } from '@/lib/security';
 import { emitSocketEvent } from '@/lib/socket';
+import { canMonitorAll, normalizeRole } from '@/lib/roles';
 
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
+  const role = normalizeRole(user.role);
 
   try {
     const { searchParams } = new URL(req.url);
     const limitParam = searchParams.get('limit');
-    const isEmployee = user.role === 'employee';
-    const isTeamLead = user.role === 'team_lead';
+    const isEmployee = role === 'employee';
+    if (!isEmployee && !canMonitorAll(role)) return err('Forbidden', 403);
     const events = await listSecurityEvents({
       employeeId: isEmployee ? user.sub : (searchParams.get('employeeId') || undefined),
       date: searchParams.get('date') || undefined,
       eventType: searchParams.get('eventType') || undefined,
       limit: limitParam ? Number(limitParam) : undefined,
       viewAs: isEmployee ? 'employee' : undefined,
-      departmentId: isTeamLead ? user.teamId : undefined,
     });
     return ok(events);
   } catch (e: any) {
@@ -30,11 +31,12 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
+  const role = normalizeRole(user.role);
 
   try {
     const body = await req.json();
     const targetEmployeeId =
-      ['super_admin', 'admin', 'qa_manager', 'team_lead'].includes(user.role)
+      canMonitorAll(role)
         ? body?.employee_id || body?.employeeId || user.sub || null
         : user.sub || null;
     const event = await createSecurityEvent({

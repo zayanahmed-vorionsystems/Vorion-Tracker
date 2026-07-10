@@ -1,12 +1,14 @@
 import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
-import { requireRole, ok } from '@/lib/api';
+import { requireAuth, err, ok } from '@/lib/api';
+import { canAccessLiveMonitor, normalizeRole } from '@/lib/roles';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
-  const user = requireRole(req, 'super_admin', 'admin', 'qa_manager', 'team_lead', 'executive');
+  const user = requireAuth(req);
   if ('status' in user) return user;
+  if (!canAccessLiveMonitor(normalizeRole(user.role))) return err('Forbidden', 403);
 
   const rows = await sql`
     WITH active_attendance AS (
@@ -40,10 +42,6 @@ export async function GET(req: NextRequest) {
     LEFT JOIN employee_status es ON es.employee_id = p.id
     LEFT JOIN latest_screenshots ls ON ls.employee_id = p.id
     WHERE p.role = 'employee'
-      AND (
-        ${user.role} != 'team_lead'
-        OR p.department_id = ${user.teamId}
-      )
     ORDER BY p.full_name
   `;
 

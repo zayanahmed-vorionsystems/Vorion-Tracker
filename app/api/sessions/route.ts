@@ -4,6 +4,7 @@ import { sql } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
 import { emitSocketEvent } from '@/lib/socket';
 import { clampLimit } from '@/lib/request-security';
+import { canMonitorAll, normalizeRole } from '@/lib/roles';
 
 function employeeStatusPayload(user: any, status: string, appName?: string | null) {
   const timestamp = new Date().toISOString();
@@ -280,7 +281,8 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
-  const { role, sub } = user;
+  const role = normalizeRole(user.role);
+  const { sub } = user;
   const { searchParams } = new URL(req.url);
   const date = searchParams.get('date') || new Date().toISOString().slice(0, 10);
   const limit = clampLimit(searchParams.get('limit'), 200, 500);
@@ -296,27 +298,17 @@ export async function GET(req: NextRequest) {
         ORDER BY a.check_in DESC
         LIMIT ${limit}
       `;
-    } else if (role === 'team_lead') {
+    } else if (canMonitorAll(role)) {
       rows = await sql`
         SELECT a.*, p.full_name AS user_name
         FROM attendance a
         JOIN public.profiles p ON p.id = a.employee_id
         WHERE DATE(a.check_in) = ${date}
-          AND p.department_id = (
-            SELECT department_id FROM public.profiles WHERE id = ${sub}
-          )
         ORDER BY a.check_in DESC
         LIMIT ${limit}
       `;
     } else {
-      rows = await sql`
-        SELECT a.*, p.full_name AS user_name
-        FROM attendance a
-        JOIN public.profiles p ON p.id = a.employee_id
-        WHERE DATE(a.check_in) = ${date}
-        ORDER BY a.check_in DESC
-        LIMIT ${limit}
-      `;
+      return err('Forbidden', 403);
     }
     return ok(rows);
   } catch (e: any) {

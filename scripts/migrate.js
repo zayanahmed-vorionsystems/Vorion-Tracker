@@ -30,6 +30,39 @@ async function runMigrations() {
         role TEXT NOT NULL DEFAULT 'employee',
         department_id UUID REFERENCES departments(id) ON DELETE SET NULL,
         employee_code TEXT,
+        shift_type TEXT NOT NULL DEFAULT 'full_time',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await pool.query(`
+      ALTER TABLE public.profiles
+      ADD COLUMN IF NOT EXISTS shift_type TEXT NOT NULL DEFAULT 'full_time'
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS client_assignments (
+        client_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+        employee_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (client_id, employee_id),
+        UNIQUE (employee_id)
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS screenshot_flags (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        screenshot_id UUID NOT NULL REFERENCES screenshots(id) ON DELETE CASCADE,
+        employee_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+        flagged_by UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+        comment TEXT NOT NULL DEFAULT '',
+        pdf_url TEXT,
+        pdf_name TEXT,
+        email_to TEXT[] NOT NULL DEFAULT '{}',
+        email_cc TEXT[] NOT NULL DEFAULT '{}',
+        email_sent_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
@@ -163,15 +196,25 @@ async function runMigrations() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_breaks_attendance ON breaks(attendance_id)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_attendance_employee ON attendance(employee_id)`);
 
+    await pool.query(`
+      UPDATE public.profiles
+      SET role = CASE role
+        WHEN 'super_admin' THEN 'superadmin'
+        WHEN 'team_lead' THEN 'qa_lead'
+        ELSE role
+      END
+      WHERE role IN ('super_admin', 'team_lead')
+    `);
+
     const { rows: existing } = await pool.query(
-      "SELECT id FROM public.profiles WHERE role = 'super_admin' LIMIT 1",
+      "SELECT id FROM public.profiles WHERE role = 'superadmin' LIMIT 1",
     );
 
     if (!existing.length) {
       await pool.query(
         `INSERT INTO public.profiles (full_name, email, role)
          VALUES ($1, $2, $3)`,
-        ['Super Admin', 'admin@company.com', 'super_admin'],
+        ['Super Admin', 'admin@company.com', 'superadmin'],
       );
       console.log('Created default super admin profile');
     }
