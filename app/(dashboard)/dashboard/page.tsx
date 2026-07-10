@@ -244,7 +244,7 @@ export default function DashboardPage() {
 
   // ── Live status updates from Supabase Realtime ───────────────────────
   useEffect(() => {
-    if (!token || !user?.id) return;
+    if (!token || !user?.id || !supabaseClient) return;
 
     const channel = supabaseClient
       .channel(`dashboard-status-${user.id}`)
