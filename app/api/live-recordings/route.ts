@@ -4,7 +4,11 @@ import { supabaseAdmin } from '@/lib/supabase';
 import { requireAuth, ok, err } from '@/lib/api';
 
 const MAX_RECORDING_BYTES = 100 * 1024 * 1024;
-const ALLOWED_RECORDING_TYPES = new Set(['video/webm', 'video/webm;codecs=vp8', 'video/webm;codecs=vp9,opus']);
+
+function isAllowedRecordingType(type: string) {
+  const normalized = String(type || '').trim().toLowerCase().replace(/\s+/g, '');
+  return normalized === 'video/webm' || normalized.startsWith('video/webm;codecs=');
+}
 
 async function canManageLiveRecording(user: any, employeeId: string) {
   if (['super_admin', 'admin', 'qa_manager'].includes(user.role)) return true;
@@ -45,10 +49,14 @@ export async function POST(request: NextRequest) {
     if (!file || typeof file === 'string') {
       return err('Recording file is required.', 400);
     }
+    if (file.size <= 0) {
+      return err('Recording file is empty.', 400);
+    }
     if (file.size > MAX_RECORDING_BYTES) {
       return err('Recording file is too large.', 413);
     }
-    if (!ALLOWED_RECORDING_TYPES.has(file.type || '')) {
+    if (!isAllowedRecordingType(file.type || '')) {
+      console.error('[live-recordings] unsupported file type', { type: file.type, size: file.size });
       return err('Unsupported recording file type.', 400);
     }
 

@@ -6,7 +6,11 @@ import { assertSupabaseAdmin } from '@/lib/supabase';
 import { emitSocketEvent } from '@/lib/socket';
 
 const MAX_RECORDING_BYTES = 100 * 1024 * 1024;
-const ALLOWED_RECORDING_TYPES = new Set(['video/webm', 'video/webm;codecs=vp8', 'video/webm;codecs=vp9,opus']);
+
+function isAllowedRecordingType(type: string) {
+  const normalized = String(type || '').trim().toLowerCase().replace(/\s+/g, '');
+  return normalized === 'video/webm' || normalized.startsWith('video/webm;codecs=');
+}
 
 export async function POST(req: NextRequest) {
   if (!process.env.DATABASE_URL) return err('Server misconfigured: DATABASE_URL not set', 500);
@@ -28,8 +32,12 @@ export async function POST(req: NextRequest) {
   const capturedAt = formData.get('capturedAt') as string || new Date().toISOString();
 
   if (!file) return err('No recording file');
+  if (file.size <= 0) return err('Recording file is empty', 400);
   if (file.size > MAX_RECORDING_BYTES) return err('Recording file is too large', 413);
-  if (!ALLOWED_RECORDING_TYPES.has(file.type || '')) return err('Unsupported recording file type', 400);
+  if (!isAllowedRecordingType(file.type || '')) {
+    console.error('[recordings] unsupported file type', { type: file.type, size: file.size });
+    return err('Unsupported recording file type', 400);
+  }
 
   const arrayBuffer = await file.arrayBuffer();
   const buffer      = Buffer.from(arrayBuffer);
