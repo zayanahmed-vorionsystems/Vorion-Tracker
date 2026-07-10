@@ -1,5 +1,5 @@
 // lib/db.ts
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 
 function stripQuotes(value: string): string {
   const trimmed = value.trim();
@@ -19,6 +19,26 @@ if (connectionString) {
   } catch (error) {
     console.error('Failed to parse DATABASE_URL:', error);
     throw error;
+  }
+}
+
+export async function withTransaction<T>(callback: (client: PoolClient) => Promise<T>) {
+  if (!pool) throw new Error('DATABASE_URL environment variable is not set');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await callback(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      console.error('Transaction rollback failed:', rollbackError);
+    }
+    throw error;
+  } finally {
+    client.release();
   }
 }
 

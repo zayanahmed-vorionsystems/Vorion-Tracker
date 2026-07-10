@@ -6,14 +6,7 @@ import { assertSupabaseAdmin } from '@/lib/supabase';
 import { emitSocketEvent } from '@/lib/socket';
 
 const MAX_RECORDING_BYTES = 100 * 1024 * 1024;
-const ALLOWED_RECORDING_TYPES = new Set(['video/webm', 'video/webm;codecs=vp8', 'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9', 'video/webm;codecs=vp9,opus']);
-
-function isSupportedRecordingType(fileType: string) {
-  const normalizedType = String(fileType || '').trim().toLowerCase();
-  if (!normalizedType) return false;
-  if (ALLOWED_RECORDING_TYPES.has(normalizedType)) return true;
-  return normalizedType.startsWith('video/webm;');
-}
+const ALLOWED_RECORDING_TYPES = new Set(['video/webm', 'video/webm;codecs=vp8', 'video/webm;codecs=vp9,opus']);
 
 export async function POST(req: NextRequest) {
   if (!process.env.DATABASE_URL) return err('Server misconfigured: DATABASE_URL not set', 500);
@@ -36,7 +29,7 @@ export async function POST(req: NextRequest) {
 
   if (!file) return err('No recording file');
   if (file.size > MAX_RECORDING_BYTES) return err('Recording file is too large', 413);
-  if (!isSupportedRecordingType(file.type || '')) return err('Unsupported recording file type', 400);
+  if (!ALLOWED_RECORDING_TYPES.has(file.type || '')) return err('Unsupported recording file type', 400);
 
   const arrayBuffer = await file.arrayBuffer();
   const buffer      = Buffer.from(arrayBuffer);
@@ -55,7 +48,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const [rec] = await sql`
-      INSERT INTO recordings (employee_id, session_id, file_url, duration_seconds, captured_at)
+      INSERT INTO recordings (user_id, session_id, file_url, duration_seconds, captured_at)
       VALUES (${user.sub}, ${sessionId}, ${publicUrl}, ${duration || null}, ${capturedAt})
       RETURNING id
     `;
@@ -89,8 +82,8 @@ export async function GET(req: NextRequest) {
     rows = await sql`
       SELECT r.*, p.full_name AS user_name
       FROM recordings r
-      JOIN public.profiles p ON p.id = r.employee_id
-      WHERE r.employee_id = ${user.sub}
+      JOIN public.profiles p ON p.id = r.user_id
+      WHERE r.user_id = ${user.sub}
       ORDER BY r.captured_at DESC
       LIMIT ${limit}
     `;
@@ -99,11 +92,11 @@ export async function GET(req: NextRequest) {
       rows = await sql`
         SELECT r.*, p.full_name AS user_name
         FROM recordings r
-        JOIN public.profiles p ON p.id = r.employee_id
+        JOIN public.profiles p ON p.id = r.user_id
         WHERE p.department_id = (
           SELECT department_id FROM public.profiles WHERE id = ${user.sub}
         )
-        AND r.employee_id = ${filterUserId}
+        AND r.user_id = ${filterUserId}
         ORDER BY r.captured_at DESC
         LIMIT ${limit}
       `;
@@ -111,7 +104,7 @@ export async function GET(req: NextRequest) {
       rows = await sql`
         SELECT r.*, p.full_name AS user_name
         FROM recordings r
-        JOIN public.profiles p ON p.id = r.employee_id
+        JOIN public.profiles p ON p.id = r.user_id
         WHERE p.department_id = (
           SELECT department_id FROM public.profiles WHERE id = ${user.sub}
         )
@@ -123,8 +116,8 @@ export async function GET(req: NextRequest) {
     rows = await sql`
       SELECT r.*, p.full_name AS user_name
       FROM recordings r
-      JOIN public.profiles p ON p.id = r.employee_id
-      WHERE r.employee_id = ${filterUserId}
+      JOIN public.profiles p ON p.id = r.user_id
+      WHERE r.user_id = ${filterUserId}
       ORDER BY r.captured_at DESC
       LIMIT ${limit}
     `;
@@ -132,7 +125,7 @@ export async function GET(req: NextRequest) {
     rows = await sql`
       SELECT r.*, p.full_name AS user_name
       FROM recordings r
-      JOIN public.profiles p ON p.id = r.employee_id
+      JOIN public.profiles p ON p.id = r.user_id
       ORDER BY r.captured_at DESC
       LIMIT ${limit}
     `;

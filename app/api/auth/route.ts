@@ -52,21 +52,6 @@ function recordFailedLogin(key: string, now: number) {
   return nextState;
 }
 
-function isAuthProviderFailure(authError: any) {
-  const message = String(authError?.message || '').toLowerCase();
-  const name = String(authError?.name || '').toLowerCase();
-  const status = Number(authError?.status || 0);
-
-  return (
-    message.includes('fetch failed') ||
-    message.includes('getaddrinfo') ||
-    message.includes('enotfound') ||
-    name.includes('retryablefetch') ||
-    name.includes('fetcherror') ||
-    status >= 500
-  );
-}
-
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
@@ -115,8 +100,9 @@ export async function POST(req: NextRequest) {
     return err('Invalid JSON payload', 400);
   }
 
-  const { email: rawEmail, password } = body;
+  const { email: rawEmail, password, context } = body;
   const email = String(rawEmail || '').trim().toLowerCase();
+  const loginContext = String(context || 'web').toLowerCase();
   if (!email || !password) return err('Email and password required');
   const now = Date.now();
   const loginKey = getLoginKey(req, email);
@@ -125,32 +111,23 @@ export async function POST(req: NextRequest) {
     return err('Too many login attempts. Please try again later.', 429);
   }
 
-  let authData;
-  let authError;
-  try {
-    const result = await admin.auth.signInWithPassword({ email, password });
-    authData = result.data;
-    authError = result.error;
-  } catch (error: any) {
-    console.error('POST /api/auth upstream auth error:', error?.message || error);
-    return err('Service unavailable: auth provider unreachable', 503);
-  }
+  // 1. Verify credentials via Supabase Auth
+  const { data: authData, error: authError } =
+    await admin.auth.signInWithPassword({ email, password });
 
-  if (authError) {
-    if (isAuthProviderFailure(authError)) {
-      console.error('POST /api/auth upstream auth error:', authError);
-      return err('Service unavailable: auth provider unreachable', 503);
-    }
-
-    recordFailedLogin(loginKey, now);
-    return err('Invalid credentials', 401);
-  }
-
-  if (!authData?.user) {
+  if (authError || !authData?.user) {
     recordFailedLogin(loginKey, now);
     return err('Invalid credentials', 401);
   }
   loginAttempts.delete(loginKey);
+
+  // Enforce email verification
+  // Supabase user object may have `email_confirmed_at` or `confirmed_at` depending on setup
+  const userRecord: any = authData.user;
+  const confirmedAt = userRecord?.email_confirmed_at || userRecord?.confirmed_at || null;
+  if (!confirmedAt) {
+    return err('Please verify your email before signing in.', 403);
+  }
 
   // 2. Fetch profile from public.profiles
   let profile;
@@ -168,6 +145,16 @@ export async function POST(req: NextRequest) {
   }
 
   if (!profile) return err('Profile not found', 404);
+
+  console.log('[auth:login] Successful password check', { email, role: profile.role, context: loginContext });
+
+  if (profile.role === 'employee') {
+    if (loginContext === 'web') {
+      return err('Employees can only sign in using the Desktop Agent.', 403);
+    }
+  } else if (loginContext === 'agent') {
+    return err('This account is only allowed to use the Web Dashboard.', 403);
+  }
 
   const token = signToken({
     sub:    profile.id,

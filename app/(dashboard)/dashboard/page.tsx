@@ -2,6 +2,7 @@
 // app/(dashboard)/dashboard/page.tsx
 import { useEffect, useState, useCallback } from 'react';
 import { useAuthStore } from '@/store/auth';
+import { supabaseClient } from '@/lib/supabase';
 import { fmtCompact, fmtPrecise, timeAgo } from './timeUtils';
 
 function fmt(secs: number) {
@@ -242,6 +243,29 @@ export default function DashboardPage() {
   }, [fetchData]);
 
   // ── Live status updates from Supabase Realtime ───────────────────────
+  useEffect(() => {
+    if (!token || !user?.id) return;
+
+    const channel = supabaseClient
+      .channel(`dashboard-status-${user.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'employee_status' }, (payload: any) => {
+        const record = payload?.new ?? payload?.record ?? payload;
+        const employeeId = record?.employee_id ?? record?.employeeId;
+        if (!employeeId) return;
+        updateRowFromSocket({
+          employeeId,
+          status: record?.current_status,
+          lastActivity: record?.last_activity,
+          currentApp: record?.current_app,
+        });
+      })
+      .subscribe();
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [token, user?.id, updateRowFromSocket]);
+
   // ── Derived stats ─────────────────────────────────────────────────────
   const active   = rows.filter(r => r.current_status === 'working' || r.current_status === 'on_break').length;
   const totHrs   = rows.reduce((a, r) => a + r.total_seconds, 0);
