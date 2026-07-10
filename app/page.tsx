@@ -7,20 +7,24 @@ import { useAuthStore } from '@/store/auth';
 export default function Root() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
+  const token = useAuthStore((state) => state.token);
+  const hasHydrated = useAuthStore((state) => state.hasHydrated);
 
   useEffect(() => {
+    if (!hasHydrated) return;
+
     let hasStoredSession = false;
 
     try {
-      const raw = window.sessionStorage.getItem('worktrack-auth');
+      const raw = window.localStorage.getItem('worktrack-auth');
       if (raw) {
         const parsed = JSON.parse(raw);
-        hasStoredSession = Boolean(parsed?.state?.token || parsed?.state?.user);
+        hasStoredSession = Boolean(parsed?.state?.token && parsed?.state?.user);
       }
     } catch {}
 
-    router.replace(user || hasStoredSession ? '/dashboard' : '/login');
-  }, [router, user]);
+    router.replace(user && token || hasStoredSession ? '/dashboard' : '/login');
+  }, [hasHydrated, router, token, user]);
 
   return (
     <main

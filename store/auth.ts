@@ -33,6 +33,10 @@ export const useAuthStore = create<AuthState>()(
       name: 'worktrack-auth',
       partialize: (state) => ({ token: state.token, user: state.user }),
       onRehydrateStorage: () => (state) => {
+        const hasCompleteSession = Boolean(state?.token && state?.user);
+        if (!hasCompleteSession && (state?.token || state?.user)) {
+          state?.logout();
+        }
         state?.setHydrated(true);
       },
     }

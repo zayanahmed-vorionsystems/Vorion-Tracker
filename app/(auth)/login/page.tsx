@@ -23,14 +23,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error,    setError]    = useState('');
   const [loading,  setLoading]  = useState(false);
-  const { setAuth, user, hasHydrated } = useAuthStore();
+  const { setAuth, user, token, hasHydrated } = useAuthStore();
   const router = useRouter();
 
   useEffect(() => {
-    if (hasHydrated && user) {
+    if (hasHydrated && user && token) {
       router.replace('/dashboard');
     }
-  }, [hasHydrated, router, user]);
+  }, [hasHydrated, router, token, user]);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setError('');

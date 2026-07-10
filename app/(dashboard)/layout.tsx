@@ -54,17 +54,47 @@ const NavItem = ({ href, label, show = true }: { href: string; label: string; sh
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { user, logout, hasHydrated } = useAuthStore();
+  const { user, token, logout, hasHydrated } = useAuthStore();
   const router = useRouter();
   const role = user?.role as Role;
 
   useEffect(() => {
-    if (hasHydrated && !user) {
+    if (hasHydrated && (!user || !token)) {
+      logout();
       router.replace('/login');
     }
-  }, [hasHydrated, router, user]);
+  }, [hasHydrated, logout, router, token, user]);
 
-  if (!hasHydrated || !user) return null;
+  useEffect(() => {
+    if (!hasHydrated || !token || !user) return;
+
+    let cancelled = false;
+
+    const validateSession = async () => {
+      try {
+        const response = await fetch('/api/auth', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (cancelled) return;
+
+        if (response.status === 401) {
+          logout();
+          router.replace('/login');
+        }
+      } catch {
+        // Ignore transient validation failures and let page-level requests retry.
+      }
+    };
+
+    void validateSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasHydrated, logout, router, token, user]);
+
+  if (!hasHydrated || !user || !token) return null;
 
   return (
     <div style={{
