@@ -93,14 +93,14 @@ export async function GET(req: NextRequest) {
       const dayRange = getUtcRangeForLocalDate(date, timeZone);
       const assignedRows = filterUserId
         ? await sql`
-            SELECT p.id, p.shift_type
+            SELECT p.id, ca.shift_type AS assignment_shift_type
             FROM client_assignments ca
             JOIN public.profiles p ON p.id = ca.employee_id
             WHERE ca.client_id = ${sub}
               AND p.id = ${filterUserId}
           `
         : await sql`
-            SELECT p.id, p.shift_type
+            SELECT p.id, ca.shift_type AS assignment_shift_type
             FROM client_assignments ca
             JOIN public.profiles p ON p.id = ca.employee_id
             WHERE ca.client_id = ${sub}
@@ -124,7 +124,7 @@ export async function GET(req: NextRequest) {
         `;
         allRows.push(
           ...chunk.filter((row: any) =>
-            isScreenshotWithinShiftInPkt(row.captured_at, assigned.shift_type || 'full_time'),
+            isScreenshotWithinShiftInPkt(row.captured_at, assigned.assignment_shift_type || 'full_time'),
           ),
         );
       }

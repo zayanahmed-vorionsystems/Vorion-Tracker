@@ -74,14 +74,13 @@ function getHourInPkt(timestamp: string | Date) {
 }
 
 export function getClientShiftWindows(date: string, shiftType: ShiftType): TimeWindow[] {
-  const nextDate = addDays(date, 1);
   const firstHalf = {
-    startIso: `${date}T20:00:00+05:00`,
-    endIso: `${nextDate}T00:00:00+05:00`,
+    startIso: `${date}T08:00:00+05:00`,
+    endIso: `${date}T12:00:00+05:00`,
   };
   const secondHalf = {
-    startIso: `${nextDate}T01:00:00+05:00`,
-    endIso: `${nextDate}T05:00:00+05:00`,
+    startIso: `${date}T13:00:00+05:00`,
+    endIso: `${date}T17:00:00+05:00`,
   };
 
   if (shiftType === 'first_half') return [firstHalf];
@@ -104,9 +103,9 @@ export function getUtcRangeForLocalDate(date: string, timeZone: string) {
 export function isScreenshotWithinShiftInPkt(capturedAt: string, shiftType: ShiftType) {
   const hour = getHourInPkt(capturedAt);
 
-  if (shiftType === 'first_half') return hour >= 20;
-  if (shiftType === 'second_half') return hour >= 1 && hour < 5;
-  return hour >= 20 || (hour >= 1 && hour < 5);
+  if (shiftType === 'first_half') return hour >= 8 && hour < 12;
+  if (shiftType === 'second_half') return hour >= 13 && hour < 17;
+  return (hour >= 8 && hour < 12) || (hour >= 13 && hour < 17);
 }
 
 export function getShiftWindowsForUtcRange(rangeStart: Date, rangeEnd: Date, shiftType: ShiftType) {

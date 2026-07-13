@@ -92,14 +92,66 @@ async function insertProfile(
   return result.rows[0];
 }
 
-async function syncClientAssignment(client: PoolClient, employeeId: string, clientId: string | null) {
-  await client.query('DELETE FROM client_assignments WHERE employee_id = $1', [employeeId]);
-  if (!clientId) return;
+function shiftsConflict(existingShift: ShiftType, nextShift: ShiftType) {
+  if (existingShift === 'full_time' || nextShift === 'full_time') return true;
+  return existingShift === nextShift;
+}
+
+function getShiftLabel(shiftType: ShiftType) {
+  if (shiftType === 'first_half') return 'First Half (08:00-12:00 PKT)';
+  if (shiftType === 'second_half') return 'Second Half (13:00-17:00 PKT)';
+  return 'Full Time (08:00-17:00 PKT)';
+}
+
+async function syncClientAssignment(
+  client: PoolClient,
+  clientId: string,
+  employeeId: string | null,
+  shiftType: ShiftType = 'full_time',
+) {
+  await client.query('DELETE FROM client_assignments WHERE client_id = $1', [clientId]);
+  if (!employeeId) return;
+
+  const normalizedShiftType = normalizeShiftType(shiftType);
+  const employeeResult = await client.query(
+    `SELECT id, full_name, role
+     FROM public.profiles
+     WHERE id = $1
+     LIMIT 1`,
+    [employeeId]
+  );
+  const employee = employeeResult.rows[0];
+  if (!employee || normalizeRole(employee.role) !== 'employee') {
+    throw new UserServiceError(400, 'Assigned user must be an employee.');
+  }
+
+  const conflictResult = await client.query(
+    `SELECT ca.client_id, ca.shift_type, p.full_name AS client_name
+     FROM client_assignments ca
+     JOIN public.profiles p ON p.id = ca.client_id
+     WHERE ca.employee_id = $1
+       AND ca.client_id <> $2
+     FOR UPDATE`,
+    [employeeId, clientId]
+  );
+
+  const conflictingAssignment = conflictResult.rows.find((row) =>
+    shiftsConflict(normalizeShiftType(row.shift_type), normalizedShiftType)
+  );
+
+  if (conflictingAssignment) {
+    throw new UserServiceError(
+      409,
+      `${employee.full_name} is already assigned to ${conflictingAssignment.client_name} for ${getShiftLabel(normalizeShiftType(conflictingAssignment.shift_type))}.`
+    );
+  }
+
   await client.query(
-    `INSERT INTO client_assignments (client_id, employee_id)
-     VALUES ($1, $2)
-     ON CONFLICT (client_id, employee_id) DO NOTHING`,
-    [clientId, employeeId]
+    `INSERT INTO client_assignments (client_id, employee_id, shift_type)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (client_id, employee_id)
+     DO UPDATE SET shift_type = EXCLUDED.shift_type, created_at = NOW()`,
+    [clientId, employeeId, normalizedShiftType]
   );
 }
 
@@ -117,7 +169,7 @@ export async function getAssignedClientId(employeeId: string) {
 export async function listAssignedEmployeesForClient(clientId: string) {
   await ensureRoleFeatureSchema();
   return await sql`
-    SELECT p.id, p.full_name AS name, p.email, p.role, p.department_id, p.employee_code, p.shift_type
+    SELECT p.id, p.full_name AS name, p.email, p.role, p.department_id, p.employee_code, ca.shift_type AS assignment_shift_type
     FROM client_assignments ca
     JOIN public.profiles p ON p.id = ca.employee_id
     WHERE ca.client_id = ${clientId}
@@ -199,7 +251,8 @@ export async function createEmployeeAccount(admin: any, payload: {
   departmentId: string | null;
   password: string;
   shiftType?: ShiftType | null;
-  clientId?: string | null;
+  assignedEmployeeId?: string | null;
+  assignmentShiftType?: ShiftType | null;
 }) {
   const email = normalizeEmail(payload.email);
   const normalizedRole = normalizeRole(payload.role);
@@ -254,8 +307,8 @@ export async function createEmployeeAccount(admin: any, payload: {
   try {
     profile = await withTransaction(async (client) => {
       const createdProfile = await insertProfile(client, userId, payload.name, email, normalizedRole, payload.departmentId, normalizedShiftType);
-      if (normalizedRole === 'employee') {
-        await syncClientAssignment(client, userId, payload.clientId || null);
+      if (normalizedRole === 'client') {
+        await syncClientAssignment(client, userId, payload.assignedEmployeeId || null, normalizeShiftType(payload.assignmentShiftType));
       }
       return createdProfile;
     });

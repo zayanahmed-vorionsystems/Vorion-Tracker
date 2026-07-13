@@ -208,6 +208,8 @@ let agentId:     string             = get('agentId') || `agent-${Math.random().t
 let status:      'offline'|'active'|'break'|'idle' = 'offline';
 let tracking     = false;
 let isQuitting   = false;
+let allowImmediateQuit = false;
+let quitInFlight: Promise<void> | null = null;
 let ssInterval:         NodeJS.Timeout|null = null;
 let idleInterval:       NodeJS.Timeout|null = null;
 let heartbeatInterval:  NodeJS.Timeout|null = null;
@@ -230,6 +232,33 @@ set('agentId', agentId);
 function clearTimer(timer: NodeJS.Timeout | null) {
   if (timer) clearInterval(timer);
   return null;
+}
+
+async function requestGracefulQuit() {
+  if (quitInFlight) return quitInFlight;
+
+  quitInFlight = (async () => {
+    isQuitting = true;
+
+    try {
+      if (tracking) {
+        await stopTracking();
+      } else {
+        await teardownLiveWatch();
+      }
+    } catch (error) {
+      console.error('[QUIT] graceful shutdown failed:', error);
+    } finally {
+      removeProxyBlock();
+      tray?.destroy();
+      tray = null;
+      allowImmediateQuit = true;
+      quitInFlight = null;
+      app.quit();
+    }
+  })();
+
+  return quitInFlight;
 }
 
 // ─── Live streaming state (WebRTC) ──────────────────────────────────────────
@@ -771,8 +800,16 @@ async function watchIdle() {
   const idleSec = powerMonitor.getSystemIdleTime();
   const isIdle  = idleSec > 60;
   mainWindow?.webContents.send('idle-status',{ isIdle, idleSec });
-  if (isIdle && status === 'active')  { status = 'idle';   broadcastStatus(); }
-  if (!isIdle && status === 'idle')   { status = 'active'; broadcastStatus(); }
+  if (isIdle && status === 'active')  {
+    status = 'idle';
+    broadcastStatus();
+    void sendHeartbeat();
+  }
+  if (!isIdle && status === 'idle')   {
+    status = 'active';
+    broadcastStatus();
+    void sendHeartbeat();
+  }
 }
 
 // ─── Tray ───────────────────────────────────────────────────────────────────
@@ -785,7 +822,7 @@ function updateTray() {
     { label: 'Open window', click:()=>mainWindow?.show() },
     { label: 'Open dashboard in browser', click:()=>shell.openExternal(SERVER_URL) },
     { type:'separator' },
-    { label: 'Quit', click:()=>{ stopTracking(); app.exit(0); } },
+    { label: 'Quit', click:()=>{ void requestGracefulQuit(); } },
   ]));
   tray.setToolTip(tracking?`Vorion Tracker — tracking ${userName}`:'Vorion Tracker — not tracking');
 }
@@ -1021,11 +1058,12 @@ app.on('window-all-closed', () => {
   isQuitting = true;
   app.quit();
 });
-app.on('before-quit', () => {
-  isQuitting = true;
-  tray?.destroy();
-  tray = null;
-  tracking && stopTracking();
-  void teardownLiveWatch();
-  removeProxyBlock();
+app.on('before-quit', (event) => {
+  if (allowImmediateQuit) {
+    isQuitting = true;
+    return;
+  }
+
+  event.preventDefault();
+  void requestGracefulQuit();
 });

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/auth';
 import { normalizeRole } from '@/lib/roles';
+import { getCurrentDateInTimeZone, getTimeZoneDisplayName, useUserTimeZone } from '@/lib/timezone-client';
 
 function fmt(secs: number) {
   if (!secs) return '-';
@@ -28,11 +29,10 @@ export default function TimelinePage() {
   const { token, user } = useAuthStore();
   const role = normalizeRole(user?.role);
   const isClient = role === 'client';
-  const clientTimeZone = typeof window === 'undefined'
-    ? 'America/New_York'
-    : Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+  const timeZoneInfo = useUserTimeZone();
+  const clientTimeZone = timeZoneInfo.timezone;
   const [rows, setRows] = useState<any[]>([]);
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => getCurrentDateInTimeZone(clientTimeZone));
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -71,6 +71,7 @@ export default function TimelinePage() {
         >
           {isClient ? 'Assigned VA Timeline' : 'Employee Timeline'}
         </h1>
+        <div style={{ color: COLORS.textMuted, fontSize: 12 }}>{getTimeZoneDisplayName(timeZoneInfo)}</div>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 14 }}>
             {LEGEND.map((legend) => (

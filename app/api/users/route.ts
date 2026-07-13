@@ -2,7 +2,7 @@
 import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { assertSupabaseAdmin } from '@/lib/supabase';
-import { requireAuth, requireRole, ok, err } from '@/lib/api';
+import { requireAuth, ok, err } from '@/lib/api';
 import {
   canManageUsers,
   canMonitorAll,
@@ -11,11 +11,11 @@ import {
   normalizeShiftType,
   type Role,
 } from '@/lib/roles';
+import { ensureRoleFeatureSchema } from '@/lib/schema';
 import {
   createEmployeeAccount,
   deleteUserAndProfile,
   deriveStatusFromAuthUser,
-  getAssignedClientId,
   listAssignedEmployeesForClient,
   UserServiceError,
 } from '@/lib/user';
@@ -25,6 +25,7 @@ export const revalidate = 0;
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
+  await ensureRoleFeatureSchema();
 
   const role = normalizeRole(user.role);
   const { sub } = user;
@@ -44,10 +45,13 @@ export async function GET(req: NextRequest) {
         p.shift_type,
         p.created_at,
         d.name AS department_name,
-        ca.client_id AS assigned_client_id
+        ca.employee_id AS assigned_employee_id,
+        ca.shift_type AS assignment_shift_type,
+        employee.full_name AS assigned_employee_name
       FROM public.profiles p
       LEFT JOIN departments d ON d.id = p.department_id
-      LEFT JOIN client_assignments ca ON ca.employee_id = p.id
+      LEFT JOIN client_assignments ca ON ca.client_id = p.id
+      LEFT JOIN public.profiles employee ON employee.id = ca.employee_id
       ORDER BY p.full_name
     `;
   } else if (role === 'client') {
@@ -128,6 +132,7 @@ export async function POST(req: NextRequest) {
   const authUser = requireAuth(req);
   if ('status' in authUser) return authUser;
   if (!canManageUsers(normalizeRole(authUser.role))) return err('Forbidden', 403);
+  await ensureRoleFeatureSchema();
 
   let admin;
   try {
@@ -137,10 +142,20 @@ export async function POST(req: NextRequest) {
     return err(e?.message || 'Server misconfigured: Supabase admin unavailable', 500);
   }
 
-  const { name, email: rawEmail, role, departmentId, password, shiftType, clientId } = await req.json();
+  const {
+    name,
+    email: rawEmail,
+    role,
+    departmentId,
+    password,
+    shiftType,
+    assignedEmployeeId,
+    assignmentShiftType,
+  } = await req.json();
   const email = String(rawEmail || '').trim().toLowerCase();
   const normalizedRole = normalizeRole(role);
   const normalizedShiftType = normalizeShiftType(shiftType);
+  const normalizedAssignmentShiftType = normalizeShiftType(assignmentShiftType);
   if (!name || !email || !normalizedRole) {
     return err('name, email and role are required');
   }
@@ -161,20 +176,27 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  if (normalizedRole !== 'employee' && clientId) {
-    return err('Only employee accounts can be assigned to a client.', 400);
+  if (normalizedRole !== 'client' && assignedEmployeeId) {
+    return err('Only client accounts can have an assigned employee.', 400);
   }
 
   const safeDeptId =
     departmentId && String(departmentId).trim() !== '' ? departmentId : null;
-  const safeClientId =
-    clientId && String(clientId).trim() !== '' ? String(clientId).trim() : null;
+  const safeAssignedEmployeeId =
+    assignedEmployeeId && String(assignedEmployeeId).trim() !== '' ? String(assignedEmployeeId).trim() : null;
 
   if (normalizedRole === 'employee' && !safeDeptId) {
     return err('Department is required for employee accounts', 400);
   }
 
-  console.log('[users:POST] create request', { email, role: normalizedRole, departmentId: safeDeptId, clientId: safeClientId, shiftType: normalizedShiftType });
+  console.log('[users:POST] create request', {
+    email,
+    role: normalizedRole,
+    departmentId: safeDeptId,
+    assignedEmployeeId: safeAssignedEmployeeId,
+    assignmentShiftType: normalizedAssignmentShiftType,
+    shiftType: normalizedShiftType,
+  });
 
   const payload = {
     name,
@@ -182,7 +204,8 @@ export async function POST(req: NextRequest) {
     role: normalizedRole,
     departmentId: safeDeptId,
     shiftType: normalizedShiftType,
-    clientId: safeClientId,
+    assignedEmployeeId: safeAssignedEmployeeId,
+    assignmentShiftType: normalizedAssignmentShiftType,
   };
 
   try {
@@ -237,6 +260,7 @@ export async function PATCH(req: NextRequest) {
   const authUser = requireAuth(req);
   if ('status' in authUser) return authUser;
   const actorRole = normalizeRole(authUser.role);
+  await ensureRoleFeatureSchema();
 
   let admin;
   try {
@@ -247,7 +271,18 @@ export async function PATCH(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { id, name, email: rawEmail, role, departmentId, password, disabled, shiftType, clientId } = body;
+  const {
+    id,
+    name,
+    email: rawEmail,
+    role,
+    departmentId,
+    password,
+    disabled,
+    shiftType,
+    assignedEmployeeId,
+    assignmentShiftType,
+  } = body;
   if (!id) return err('User id is required', 400);
 
   // Allow if the requester can manage users, or if they're editing their own profile
@@ -282,12 +317,16 @@ export async function PATCH(req: NextRequest) {
       : departmentId && String(departmentId).trim() !== ''
       ? departmentId
       : null;
-  const safeClientId =
-    clientId === undefined
+  const safeAssignedEmployeeId =
+    assignedEmployeeId === undefined
       ? undefined
-      : clientId && String(clientId).trim() !== ''
-      ? String(clientId).trim()
+      : assignedEmployeeId && String(assignedEmployeeId).trim() !== ''
+      ? String(assignedEmployeeId).trim()
       : null;
+  const safeAssignmentShiftType =
+    assignmentShiftType === undefined
+      ? undefined
+      : normalizeShiftType(assignmentShiftType);
 
   const currentUserRows = await sql`SELECT role, department_id FROM public.profiles WHERE id = ${id} LIMIT 1`;
   const currentUser = currentUserRows?.[0];
@@ -300,7 +339,8 @@ export async function PATCH(req: NextRequest) {
 
   if (!isAdmin && role !== undefined) return err('Forbidden', 403);
   if (!isAdmin && departmentId !== undefined) return err('Forbidden', 403);
-  if (!isAdmin && clientId !== undefined) return err('Forbidden', 403);
+  if (!isAdmin && assignedEmployeeId !== undefined) return err('Forbidden', 403);
+  if (!isAdmin && assignmentShiftType !== undefined) return err('Forbidden', 403);
   if (!isAdmin && shiftType !== undefined) return err('Forbidden', 403);
 
   const authPayload: Record<string, unknown> = {};
@@ -372,24 +412,76 @@ export async function PATCH(req: NextRequest) {
       WHERE id = ${id}
     `;
 
-    if (safeClientId !== undefined || nextRole === 'employee' || (role === undefined && clientId !== undefined)) {
-      await sql`DELETE FROM client_assignments WHERE employee_id = ${id}`;
-      const resolvedRole = nextRole !== undefined
-        ? nextRole
-        : normalizeRole((await sql`SELECT role FROM public.profiles WHERE id = ${id} LIMIT 1`)[0]?.role);
-      if (resolvedRole === 'employee' && safeClientId) {
-        await sql`
-          INSERT INTO client_assignments (client_id, employee_id)
-          VALUES (${safeClientId}, ${id})
-          ON CONFLICT (client_id, employee_id) DO NOTHING
+    const resolvedRole = nextRole !== undefined
+      ? nextRole
+      : normalizeRole((await sql`SELECT role FROM public.profiles WHERE id = ${id} LIMIT 1`)[0]?.role);
+
+    if (resolvedRole !== 'client') {
+      await sql`DELETE FROM client_assignments WHERE client_id = ${id}`;
+    } else if (safeAssignedEmployeeId !== undefined || safeAssignmentShiftType !== undefined || nextRole === 'client') {
+      const currentAssignmentRows = await sql`
+        SELECT employee_id, shift_type
+        FROM client_assignments
+        WHERE client_id = ${id}
+        LIMIT 1
+      `;
+      const currentAssignment = currentAssignmentRows[0];
+      const nextAssignedEmployeeId =
+        safeAssignedEmployeeId !== undefined ? safeAssignedEmployeeId : currentAssignment?.employee_id || null;
+      const nextAssignmentShift =
+        safeAssignmentShiftType !== undefined ? safeAssignmentShiftType : normalizeShiftType(currentAssignment?.shift_type);
+
+      if (nextAssignedEmployeeId) {
+        const [employeeRow] = await sql`
+          SELECT full_name, role
+          FROM public.profiles
+          WHERE id = ${nextAssignedEmployeeId}
+          LIMIT 1
         `;
+        if (!employeeRow || normalizeRole(employeeRow.role) !== 'employee') {
+          return err('Assigned user must be an employee.', 400);
+        }
+
+        const conflictRows = await sql`
+          SELECT ca.client_id, ca.shift_type, p.full_name AS client_name, employee.full_name AS employee_name
+          FROM client_assignments ca
+          JOIN public.profiles p ON p.id = ca.client_id
+          JOIN public.profiles employee ON employee.id = ca.employee_id
+          WHERE ca.employee_id = ${nextAssignedEmployeeId}
+            AND ca.client_id <> ${id}
+        `;
+        const conflictingAssignment = conflictRows.find((row: any) => {
+          const existingShift = normalizeShiftType(row.shift_type);
+          return existingShift === 'full_time' || nextAssignmentShift === 'full_time' || existingShift === nextAssignmentShift;
+        });
+        if (conflictingAssignment) {
+          const existingShift = normalizeShiftType(conflictingAssignment.shift_type);
+          const label = existingShift === 'first_half'
+            ? 'First Half (08:00-12:00 PKT)'
+            : existingShift === 'second_half'
+            ? 'Second Half (13:00-17:00 PKT)'
+            : 'Full Time (08:00-17:00 PKT)';
+          return err(`${conflictingAssignment.employee_name} is already assigned to ${conflictingAssignment.client_name} for ${label}.`, 409);
+        }
+
+        await sql`DELETE FROM client_assignments WHERE client_id = ${id}`;
+
+        await sql`
+          INSERT INTO client_assignments (client_id, employee_id, shift_type)
+          VALUES (${id}, ${nextAssignedEmployeeId}, ${nextAssignmentShift})
+          ON CONFLICT (client_id, employee_id)
+          DO UPDATE SET shift_type = EXCLUDED.shift_type, created_at = NOW()
+        `;
+      } else {
+        await sql`DELETE FROM client_assignments WHERE client_id = ${id}`;
       }
     }
   } catch (e: any) {
     console.error('Update profile error:', e);
+    if (e instanceof UserServiceError) return err(e.message, e.status);
     if (e.code === '23505') return err('Email already exists', 409);
-    return err('Failed to update user profile', 500);
+    return err(e?.message || 'Failed to update user profile', 500);
   }
 
-  return ok({ ok: true, assignedClientId: safeClientId ?? (await getAssignedClientId(id)) });
+  return ok({ ok: true });
 }

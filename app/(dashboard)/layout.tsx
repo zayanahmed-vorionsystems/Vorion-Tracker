@@ -12,6 +12,7 @@ import {
   getRoleLabel,
   type Role,
 } from '@/store/auth';
+import { getTimeZoneDisplayName, useUserTimeZone } from '@/lib/timezone-client';
 import Image from 'next/image';
 import vorionLogo from '@/public/vorion-logo-dark.png';
 
@@ -64,6 +65,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { user, token, logout, hasHydrated } = useAuthStore();
   const router = useRouter();
   const role = user?.role as Role;
+  const timeZoneInfo = useUserTimeZone();
 
   useEffect(() => {
     if (hasHydrated && (!user || !token)) {
@@ -170,6 +172,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div style={{ borderTop: `1px solid ${BRAND.border}`, paddingTop: 14 }}>
           <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2, color: BRAND.white }}>{user.name}</div>
           <div style={{ fontSize: 11, color: BRAND.mutedFaint, marginBottom: 10 }}>{user.email}</div>
+          <div style={{ fontSize: 10, color: BRAND.mutedFaint, marginBottom: 10 }}>
+            Timezone: {getTimeZoneDisplayName(timeZoneInfo)}
+          </div>
           <button onClick={() => { logout(); router.replace('/login'); }} style={{
             fontSize: 12, color: BRAND.danger, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600,
           }}>

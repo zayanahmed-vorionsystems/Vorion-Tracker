@@ -45,10 +45,20 @@ async function runMigrations() {
       CREATE TABLE IF NOT EXISTS client_assignments (
         client_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
         employee_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+        shift_type TEXT NOT NULL DEFAULT 'full_time',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        PRIMARY KEY (client_id, employee_id),
-        UNIQUE (employee_id)
+        PRIMARY KEY (client_id, employee_id)
       )
+    `);
+
+    await pool.query(`
+      ALTER TABLE client_assignments
+      ADD COLUMN IF NOT EXISTS shift_type TEXT NOT NULL DEFAULT 'full_time'
+    `);
+
+    await pool.query(`
+      ALTER TABLE client_assignments
+      DROP CONSTRAINT IF EXISTS client_assignments_employee_id_key
     `);
 
     await pool.query(`

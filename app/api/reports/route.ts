@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
 import { canMonitorAll, normalizeRole, type ShiftType } from '@/lib/roles';
+import { LIVE_HEARTBEAT_STALE_SECONDS } from '@/lib/status';
 import {
   getShiftWindowsForUtcRange,
   getUtcRangeForLocalDate,
@@ -48,7 +49,7 @@ export async function GET(req: NextRequest) {
             p.full_name AS name,
             p.role,
             p.department_id,
-            p.shift_type,
+            ca.shift_type AS assignment_shift_type,
             es.current_status,
             es.current_app,
             es.last_activity
@@ -77,7 +78,7 @@ export async function GET(req: NextRequest) {
         }
 
         for (const row of assignedEmployees || []) {
-          const shiftWindows = getShiftWindowsForUtcRange(dayRange.start, dayRange.end, row.shift_type || 'full_time');
+          const shiftWindows = getShiftWindowsForUtcRange(dayRange.start, dayRange.end, row.assignment_shift_type || 'full_time');
           const attendanceRows = await sql`
             SELECT check_in, check_out
             FROM attendance
@@ -94,7 +95,7 @@ export async function GET(req: NextRequest) {
           `;
 
           const visibleScreenshots = screenshotRows.filter((shot: any) =>
-            isScreenshotWithinShiftInPkt(shot.captured_at, row.shift_type || 'full_time'),
+            isScreenshotWithinShiftInPkt(shot.captured_at, row.assignment_shift_type || 'full_time'),
           );
           const existing = rowsByEmployee.get(row.id);
           existing.total_seconds += (attendanceRows || []).reduce(
@@ -135,7 +136,7 @@ export async function GET(req: NextRequest) {
               CASE
                 WHEN a.status IN ('checked_out', 'on_break') THEN
                   GREATEST(0, COALESCE(a.total_minutes, 0) - COALESCE(b.break_minutes, 0))
-                WHEN es.last_activity IS NOT NULL AND es.last_activity < NOW() - INTERVAL '3 minutes' THEN
+                WHEN es.last_activity IS NOT NULL AND es.last_activity < NOW() - (${LIVE_HEARTBEAT_STALE_SECONDS} * INTERVAL '1 second') THEN
                   GREATEST(
                     0,
                     FLOOR(EXTRACT(EPOCH FROM (es.last_activity - a.check_in)) / 60)::int
@@ -189,8 +190,9 @@ export async function GET(req: NextRequest) {
             COALESCE(es.last_activity, '1970-01-01'::timestamptz)
           )                                            AS last_active,
           CASE
-            WHEN es.last_activity IS NULL OR es.last_activity < NOW() - INTERVAL '3 minutes' THEN 'offline'
+            WHEN es.last_activity IS NULL OR es.last_activity < NOW() - (${LIVE_HEARTBEAT_STALE_SECONDS} * INTERVAL '1 second') THEN 'offline'
             WHEN es.current_status IN ('active', 'working') THEN 'working'
+            WHEN es.current_status = 'idle' THEN 'idle'
             WHEN es.current_status IN ('break', 'on_break') THEN 'on_break'
             WHEN es.current_status IN ('checked_out', 'checkout', 'check_out') THEN 'checked_out'
             ELSE es.current_status

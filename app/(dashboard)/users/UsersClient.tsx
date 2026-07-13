@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { getRoleLabel, useAuthStore } from '@/store/auth';
-import { normalizeRole } from '@/lib/roles';
+import { normalizeRole, normalizeShiftType } from '@/lib/roles';
 
 const BRAND = {
   black: '#0A0E1A',
@@ -45,6 +45,20 @@ interface DepartmentItem {
   description: string | null;
 }
 
+function getShiftLabel(shiftType: string) {
+  const normalized = normalizeShiftType(shiftType);
+  if (normalized === 'first_half') return 'First Half (08:00-12:00 PKT)';
+  if (normalized === 'second_half') return 'Second Half (13:00-17:00 PKT)';
+  return 'Full Time (08:00-17:00 PKT)';
+}
+
+function shiftsConflict(existingShift: string, nextShift: string) {
+  const existing = normalizeShiftType(existingShift);
+  const next = normalizeShiftType(nextShift);
+  if (existing === 'full_time' || next === 'full_time') return true;
+  return existing === next;
+}
+
 export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
   const { token, user } = useAuthStore();
   const [users, setUsers] = useState(initialUsers || []);
@@ -60,14 +74,29 @@ export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
     departmentId: '',
     password: '',
     confirmPassword: '',
-    shiftType: 'full_time',
-    clientId: '',
+    assignedEmployeeId: '',
+    assignmentShiftType: 'full_time',
   });
 
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
   const actorRole = normalizeRole(user?.role);
   const canDelete = actorRole === 'superadmin';
   const clients = useMemo(() => users.filter((entry) => normalizeRole(entry.role) === 'client'), [users]);
+  const employees = useMemo(() => users.filter((entry) => normalizeRole(entry.role) === 'employee'), [users]);
+  const employeeAssignments = useMemo(() => {
+    const map = new Map<string, Array<{ clientId: string; clientName: string; shiftType: string }>>();
+    for (const client of clients) {
+      if (!client.assigned_employee_id) continue;
+      const next = map.get(client.assigned_employee_id) || [];
+      next.push({
+        clientId: client.id,
+        clientName: client.name,
+        shiftType: client.assignment_shift_type || 'full_time',
+      });
+      map.set(client.assigned_employee_id, next);
+    }
+    return map;
+  }, [clients]);
 
   const loadUsers = async () => {
     if (!headers) return;
@@ -103,10 +132,42 @@ export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
       departmentId: '',
       password: '',
       confirmPassword: '',
-      shiftType: 'full_time',
-      clientId: '',
+      assignedEmployeeId: '',
+      assignmentShiftType: 'full_time',
     });
   };
+
+  const currentEmployeeAssignments = useMemo(() => {
+    if (form.role !== 'client' || !form.assignedEmployeeId) return [];
+    return (employeeAssignments.get(form.assignedEmployeeId) || []).filter((assignment) => assignment.clientId !== editing?.id);
+  }, [editing?.id, employeeAssignments, form.assignedEmployeeId, form.role]);
+
+  const availableShiftOptions = useMemo(() => {
+    if (form.role !== 'client' || !form.assignedEmployeeId) {
+      return [
+        { value: 'full_time', label: getShiftLabel('full_time'), disabled: false },
+        { value: 'first_half', label: getShiftLabel('first_half'), disabled: false },
+        { value: 'second_half', label: getShiftLabel('second_half'), disabled: false },
+      ];
+    }
+
+    return ['full_time', 'first_half', 'second_half'].map((value) => ({
+      value,
+      label: getShiftLabel(value),
+      disabled: currentEmployeeAssignments.some((assignment) => shiftsConflict(assignment.shiftType, value)),
+    }));
+  }, [currentEmployeeAssignments, form.assignedEmployeeId, form.role]);
+
+  useEffect(() => {
+    if (form.role !== 'client') return;
+    const currentOption = availableShiftOptions.find((option) => option.value === form.assignmentShiftType);
+    if (currentOption && !currentOption.disabled) return;
+    const firstAvailable = availableShiftOptions.find((option) => !option.disabled);
+    setForm((prev) => ({
+      ...prev,
+      assignmentShiftType: firstAvailable?.value || '',
+    }));
+  }, [availableShiftOptions, form.assignmentShiftType, form.role]);
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -116,6 +177,10 @@ export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
       if (!form.name.trim()) return setError('Full name is required');
       if (form.role === 'employee' && !form.departmentId) return setError('Department is required for employee accounts');
       if (form.role === 'employee' && !departments.length) return setError('Create a department first, then assign the employee to it');
+      if (form.role === 'client' && form.assignedEmployeeId && !form.assignmentShiftType) return setError('Select an assignment time for the client');
+      if (form.role === 'client' && form.assignedEmployeeId && availableShiftOptions.every((option) => option.disabled)) {
+        return setError('This employee has no available client time slots.');
+      }
       if (!editing && (!form.password || !form.confirmPassword)) return setError('Password and confirm password are required');
       if ((form.password || form.confirmPassword) && form.password !== form.confirmPassword) return setError('Passwords do not match');
 
@@ -125,8 +190,8 @@ export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
         email: form.email,
         role: form.role,
         departmentId: form.departmentId,
-        shiftType: form.shiftType,
-        clientId: form.role === 'employee' ? form.clientId : '',
+        assignedEmployeeId: form.role === 'client' ? form.assignedEmployeeId : '',
+        assignmentShiftType: form.role === 'client' ? form.assignmentShiftType : 'full_time',
       };
       if (form.password) body.password = form.password;
 
@@ -172,8 +237,8 @@ export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
       departmentId: entry.department_id || '',
       password: '',
       confirmPassword: '',
-      shiftType: entry.shift_type || 'full_time',
-      clientId: entry.assigned_client_id || '',
+      assignedEmployeeId: entry.assigned_employee_id || '',
+      assignmentShiftType: entry.assignment_shift_type || 'full_time',
     });
     setShow(true);
   }
@@ -183,7 +248,7 @@ export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
           <h1 style={{ fontSize: 34, fontWeight: 800, margin: 0 }}>User Management</h1>
-          <p style={{ color: BRAND.muted, marginTop: 6 }}>Manage users, employee departments, shifts, and client assignments.</p>
+          <p style={{ color: BRAND.muted, marginTop: 6 }}>Manage users, employee departments, and client-to-employee assignments.</p>
         </div>
         <button
           onClick={() => { resetForm(); setShow(true); }}
@@ -216,15 +281,28 @@ export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
                       </option>
                     ))}
                   </select>
-                  <select style={baseInput} value={form.shiftType} onChange={(e) => setField('shiftType', e.target.value)}>
-                    <option value="first_half" style={{ background: BRAND.blackSoft }}>First Half</option>
-                    <option value="second_half" style={{ background: BRAND.blackSoft }}>Second Half</option>
-                    <option value="full_time" style={{ background: BRAND.blackSoft }}>Full Time</option>
+                </>
+              )}
+              {form.role === 'client' && (
+                <>
+                  <select style={baseInput} value={form.assignedEmployeeId} onChange={(e) => setField('assignedEmployeeId', e.target.value)}>
+                    <option value="" style={{ background: BRAND.blackSoft }}>No assigned employee</option>
+                    {employees.map((employee) => (
+                      <option key={employee.id} value={employee.id} style={{ background: BRAND.blackSoft }}>
+                        {employee.name}
+                      </option>
+                    ))}
                   </select>
-                  <select style={baseInput} value={form.clientId} onChange={(e) => setField('clientId', e.target.value)}>
-                    <option value="" style={{ background: BRAND.blackSoft }}>No assigned client</option>
-                    {clients.map((client) => (
-                      <option key={client.id} value={client.id} style={{ background: BRAND.blackSoft }}>{client.name}</option>
+                  <select
+                    style={baseInput}
+                    value={form.assignmentShiftType}
+                    onChange={(e) => setField('assignmentShiftType', e.target.value)}
+                    disabled={!form.assignedEmployeeId}
+                  >
+                    {availableShiftOptions.map((option) => (
+                      <option key={option.value} value={option.value} disabled={option.disabled} style={{ background: BRAND.blackSoft }}>
+                        {option.label}
+                      </option>
                     ))}
                   </select>
                 </>
@@ -249,6 +327,12 @@ export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
               </div>
             )}
 
+            {form.role === 'client' && form.assignedEmployeeId && currentEmployeeAssignments.length > 0 && (
+              <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 12, background: 'rgba(30,90,224,.12)', color: BRAND.white }}>
+                {currentEmployeeAssignments.map((assignment) => `${assignment.clientName}: ${getShiftLabel(assignment.shiftType)}`).join(' | ')}
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
               <button type="submit" disabled={saving} style={{ padding: '10px 18px', borderRadius: 14, border: 'none', background: BRAND.blue, color: '#fff', fontWeight: 700, cursor: 'pointer' }}>
                 {saving ? 'Saving...' : editing ? 'Save changes' : 'Create user'}
@@ -265,7 +349,7 @@ export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
-              {['Name', 'Email', 'Role', 'Department', 'Shift', 'Client', 'Status', 'Actions'].map((heading) => (
+              {['Name', 'Email', 'Role', 'Department', 'Assignment Time', 'Assigned Employee', 'Status', 'Actions'].map((heading) => (
                 <th key={heading} style={{ textAlign: 'left', padding: '12px 16px', color: BRAND.muted, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em', borderBottom: `1px solid ${BRAND.border}` }}>
                   {heading}
                 </th>
@@ -275,7 +359,6 @@ export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
           <tbody>
             {users.map((entry) => {
               const entryRole = normalizeRole(entry.role);
-              const clientName = clients.find((client) => client.id === entry.assigned_client_id)?.name || '-';
               const departmentName = departments.find((department) => department.id === entry.department_id)?.name || entry.department_name || '-';
               return (
                 <tr key={entry.id} style={{ borderBottom: `1px solid ${BRAND.border}` }}>
@@ -294,8 +377,8 @@ export default function UsersClient({ initialUsers }: { initialUsers: any[] }) {
                     </span>
                   </td>
                   <td style={{ padding: '12px 16px' }}>{departmentName}</td>
-                  <td style={{ padding: '12px 16px' }}>{entryRole === 'employee' ? (entry.shift_type || 'full_time').replace(/_/g, ' ') : '-'}</td>
-                  <td style={{ padding: '12px 16px' }}>{entryRole === 'employee' ? clientName : '-'}</td>
+                  <td style={{ padding: '12px 16px' }}>{entryRole === 'client' && entry.assignment_shift_type ? getShiftLabel(entry.assignment_shift_type) : '-'}</td>
+                  <td style={{ padding: '12px 16px' }}>{entryRole === 'client' ? (entry.assigned_employee_name || '-') : '-'}</td>
                   <td style={{ padding: '12px 16px' }}>{entry.status || 'Unknown'}</td>
                   <td style={{ padding: '12px 16px' }}>
                     <button onClick={() => startEdit(entry)} style={{ padding: '8px 10px', borderRadius: 10, border: 'none', background: BRAND.blue, color: '#fff', cursor: 'pointer', fontWeight: 700 }}>

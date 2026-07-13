@@ -2,8 +2,10 @@ import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { requireAuth, err, ok } from '@/lib/api';
 import { canAccessLiveMonitor, normalizeRole } from '@/lib/roles';
+import { LIVE_HEARTBEAT_STALE_SECONDS } from '@/lib/status';
 
 export const dynamic = 'force-dynamic';
+const LIVE_HEARTBEAT_STALE_MS = LIVE_HEARTBEAT_STALE_SECONDS * 1000;
 
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
@@ -46,14 +48,22 @@ export async function GET(req: NextRequest) {
   `;
 
   return ok(
-    rows.map((row: any) => ({
-      employeeId: row.employee_id,
-      name: row.employee_name,
-      status: row.current_status || 'offline',
-      online: Boolean(row.attendance_id) && ['active', 'working', 'on_break', 'break'].includes(String(row.current_status || '').toLowerCase()),
-      activeApp: row.current_app || undefined,
-      lastSeen: row.last_activity || row.last_screenshot_at || null,
-      lastUrl: row.last_screenshot_url || undefined,
-    })),
+    rows.map((row: any) => {
+      const lastSeen = row.last_activity || row.last_screenshot_at || null;
+      const rawStatus = String(row.current_status || 'offline').toLowerCase();
+      const isRealtimeStatus = ['active', 'working', 'idle', 'on_break', 'break'].includes(rawStatus);
+      const isStale = !row.last_activity || (Date.now() - new Date(row.last_activity).getTime()) > LIVE_HEARTBEAT_STALE_MS;
+      const online = Boolean(row.attendance_id) && isRealtimeStatus && !isStale;
+
+      return {
+        employeeId: row.employee_id,
+        name: row.employee_name,
+        status: online ? (row.current_status || 'offline') : 'offline',
+        online,
+        activeApp: online ? (row.current_app || undefined) : undefined,
+        lastSeen,
+        lastUrl: row.last_screenshot_url || undefined,
+      };
+    }),
   );
 }

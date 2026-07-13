@@ -5,6 +5,7 @@ import { useAuthStore } from '@/store/auth';
 import { supabaseClient } from '@/lib/supabase';
 import { fmtCompact, fmtPrecise, timeAgo } from './timeUtils';
 import { normalizeRole } from '@/lib/roles';
+import { formatDateTimeInTimeZone, formatTimeInTimeZone, getCurrentDateInTimeZone, getTimeZoneDisplayName, useUserTimeZone } from '@/lib/timezone-client';
 
 function fmt(secs: number) {
   if (!secs) return '0h 0m';
@@ -160,11 +161,10 @@ radial-gradient(circle at bottom right,${BRAND.yellowSoft} 0%,transparent 40%)
 export default function DashboardPage() {
   const { token, user } = useAuthStore();
   const role = normalizeRole(user?.role);
-  const clientTimeZone = typeof window === 'undefined'
-    ? 'America/New_York'
-    : Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+  const timeZoneInfo = useUserTimeZone();
+  const clientTimeZone = timeZoneInfo.timezone;
   const [rows,       setRows]       = useState<any[]>([]);
-  const [date,       setDate]       = useState(new Date().toISOString().slice(0, 10));
+  const [date,       setDate]       = useState(() => getCurrentDateInTimeZone(clientTimeZone));
   const [loading,    setLoading]    = useState(true);
   const [precise,    setPrecise]    = useState(false);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
@@ -179,9 +179,10 @@ export default function DashboardPage() {
   const normalizeStatus = useCallback((value?: string | null) => {
     const raw = String(value || '').toLowerCase();
     if (raw === 'active' || raw === 'working') return 'working';
+    if (raw === 'idle') return 'idle';
     if (raw === 'break' || raw === 'on_break') return 'on_break';
     if (raw === 'checked_out' || raw === 'checkout' || raw === 'check_out') return 'checked_out';
-    if (raw === 'offline' || raw === 'idle') return 'offline';
+    if (raw === 'offline') return 'offline';
     return raw || 'offline';
   }, []);
 
@@ -274,7 +275,7 @@ export default function DashboardPage() {
   }, [token, user?.id, updateRowFromSocket]);
 
   // ── Derived stats ─────────────────────────────────────────────────────
-  const active   = rows.filter(r => r.current_status === 'working' || r.current_status === 'on_break').length;
+  const active   = rows.filter(r => ['working', 'idle', 'on_break'].includes(r.current_status)).length;
   const totHrs   = rows.reduce((a, r) => a + r.total_seconds, 0);
   const totShots = rows.reduce((a, r) => a + r.screenshot_count, 0);
   const activityValues = rows
@@ -286,6 +287,7 @@ export default function DashboardPage() {
 
   const statusLabels: Record<string, string> = {
     working:      'Working',
+    idle:         'Idle',
     on_break:     'On Break',
     checked_out:  'Checked Out',
     offline:      'Offline',
@@ -294,6 +296,7 @@ export default function DashboardPage() {
   // Status colors kept within brand family: blue = active, yellow = break, white/muted = inactive
   const statusColors: Record<string, string> = {
     working:     BRAND.blue,
+    idle:        BRAND.yellow,
     on_break:    BRAND.yellow,
     checked_out: BRAND.white,
     offline:     BRAND.mutedFaint,
@@ -319,7 +322,7 @@ export default function DashboardPage() {
           </h1>
           <p style={styles.subtext}>
             {role === 'client'
-              ? 'Review the assigned VA activity below.'
+              ? `Review the assigned VA activity below. ${getTimeZoneDisplayName(timeZoneInfo)}`
               : "Welcome back — here's your team overview"}
           </p>
         </div>

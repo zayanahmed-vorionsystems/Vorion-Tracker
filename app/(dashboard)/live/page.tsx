@@ -5,6 +5,7 @@ import { Room, RoomEvent, Track } from 'livekit-client';
 import { useAuthStore, canSendAlerts } from '@/store/auth';
 import { useRouter } from 'next/navigation';
 import { LiveWatchModal } from './components/LiveWatchModal';
+import { formatTimeInTimeZone, getTimeZoneDisplayName, useUserTimeZone } from '@/lib/timezone-client';
 
 interface Employee {
   id: string;
@@ -104,6 +105,7 @@ const styles: Record<string, React.CSSProperties> = {
 export default function LiveMonitorPage() {
   const { token, user } = useAuthStore();
   const router = useRouter();
+  const timeZoneInfo = useUserTimeZone();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [agents, setAgents] = useState<AgentCard[]>([]);
   const [alertMsg, setAlertMsg] = useState('');
@@ -395,7 +397,7 @@ export default function LiveMonitorPage() {
           </button>
           <div>
             <h1 style={styles.heading}>Live Monitor</h1>
-            <p style={styles.subtext}>LiveKit-based employee screen streaming</p>
+            <p style={styles.subtext}>LiveKit-based employee screen streaming · {getTimeZoneDisplayName(timeZoneInfo)}</p>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -535,7 +537,7 @@ export default function LiveMonitorPage() {
                 </div>
                 <div style={{ fontSize: 11, color: 'rgba(248,250,252,.35)', display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{agent.activeApp || '-'}</span>
-                  <span>{agent.lastSeen ? new Date(agent.lastSeen).toLocaleTimeString() : ''}</span>
+                  <span>{agent.lastSeen ? formatTimeInTimeZone(agent.lastSeen, timeZoneInfo.timezone) : ''}</span>
                 </div>
               </div>
             </button>
