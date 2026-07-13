@@ -23,12 +23,6 @@ const cspDirectives = [
   'upgrade-insecure-requests',
 ].join('; ');
 
-const assetPattern = /\.(?:avif|bmp|css|gif|ico|jpeg|jpg|js|map|png|svg|txt|webm|webp|woff2?)$/i;
-
-function isCacheableAsset(pathname: string) {
-  return assetPattern.test(pathname) || pathname.startsWith('/_next/static/') || pathname.startsWith('/_next/image');
-}
-
 export function middleware(req: NextRequest) {
   if (hasSuspiciousQueryPayload(req.nextUrl)) {
     return NextResponse.json(
@@ -38,8 +32,6 @@ export function middleware(req: NextRequest) {
   }
 
   const response = NextResponse.next();
-  const { pathname } = req.nextUrl;
-
   response.headers.set('X-Frame-Options', 'DENY');
   response.headers.set('X-Content-Type-Options', 'nosniff');
   response.headers.set('X-DNS-Prefetch-Control', 'off');
@@ -53,12 +45,6 @@ export function middleware(req: NextRequest) {
 
   if (!isDevelopment) {
     response.headers.set('Content-Security-Policy', cspDirectives);
-  }
-
-  if (!isCacheableAsset(pathname)) {
-    response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    response.headers.set('Pragma', 'no-cache');
-    response.headers.set('Expires', '0');
   }
 
   return response;

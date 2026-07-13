@@ -12,9 +12,7 @@ const nextConfig = {
       { protocol: 'https', hostname: '*.vercel-storage.com' },
     ],
   },
-  experimental: {
-    serverComponentsExternalPackages: ['bcryptjs'],
-  },
+  serverExternalPackages: ['bcryptjs'],
 };
 
 module.exports = nextConfig;

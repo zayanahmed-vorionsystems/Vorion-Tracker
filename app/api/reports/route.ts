@@ -77,28 +77,47 @@ export async function GET(req: NextRequest) {
           rowsByEmployee.set(row.id, existing);
         }
 
+        const employeeIds = (assignedEmployees || []).map((row: any) => row.id);
+        const [attendanceRows, screenshotRows] = employeeIds.length > 0
+          ? await Promise.all([
+              sql`
+                SELECT employee_id, check_in, check_out
+                FROM attendance
+                WHERE employee_id = ANY(${employeeIds}::uuid[])
+                  AND check_in < ${dayRange.endIso}
+                  AND COALESCE(check_out, NOW()) > ${dayRange.startIso}
+              `,
+              sql`
+                SELECT employee_id, activity_pct, captured_at
+                FROM screenshots
+                WHERE employee_id = ANY(${employeeIds}::uuid[])
+                  AND captured_at >= ${dayRange.startIso}
+                  AND captured_at < ${dayRange.endIso}
+              `,
+            ])
+          : [[], []];
+
+        const attendanceByEmployee = new Map<string, any[]>();
+        for (const attendance of attendanceRows) {
+          const records = attendanceByEmployee.get(attendance.employee_id) || [];
+          records.push(attendance);
+          attendanceByEmployee.set(attendance.employee_id, records);
+        }
+
+        const screenshotsByEmployee = new Map<string, any[]>();
+        for (const screenshot of screenshotRows) {
+          const records = screenshotsByEmployee.get(screenshot.employee_id) || [];
+          records.push(screenshot);
+          screenshotsByEmployee.set(screenshot.employee_id, records);
+        }
+
         for (const row of assignedEmployees || []) {
           const shiftWindows = getShiftWindowsForUtcRange(dayRange.start, dayRange.end, row.assignment_shift_type || 'full_time');
-          const attendanceRows = await sql`
-            SELECT check_in, check_out
-            FROM attendance
-            WHERE employee_id = ${row.id}
-              AND check_in < ${dayRange.endIso}
-              AND COALESCE(check_out, NOW()) > ${dayRange.startIso}
-          `;
-          const screenshotRows = await sql`
-            SELECT activity_pct, captured_at
-            FROM screenshots
-            WHERE employee_id = ${row.id}
-              AND captured_at >= ${dayRange.startIso}
-              AND captured_at < ${dayRange.endIso}
-          `;
-
-          const visibleScreenshots = screenshotRows.filter((shot: any) =>
+          const visibleScreenshots = (screenshotsByEmployee.get(row.id) || []).filter((shot: any) =>
             isScreenshotWithinShiftInPkt(shot.captured_at, row.assignment_shift_type || 'full_time'),
           );
           const existing = rowsByEmployee.get(row.id);
-          existing.total_seconds += (attendanceRows || []).reduce(
+          existing.total_seconds += (attendanceByEmployee.get(row.id) || []).reduce(
             (sum: number, attendance: any) => sum + overlapSeconds(attendance.check_in, attendance.check_out, shiftWindows),
             0,
           );

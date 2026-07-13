@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",
-    "@vercel/blob": "^0.23.4",
+    "@vercel/blob": "^2.6.1",
     "bcryptjs": "^2.4.3",
     "date-fns": "^3.6.0",
     "dotenv": "^17.4.2",
@@ -22,7 +22,7 @@
     "livekit-server-sdk": "^2.17.0",
     "lucide-react": "^1.23.0",
     "multer": "^2.0.0",
-    "next": "^14.2.5",
+    "next": "^15.5.16",
     "nodemailer": "^9.0.3",
     "pg": "^8.22.0",
     "react": "^18.3.0",
@@ -44,5 +44,8 @@
     "@types/uuid": "^9.0.8",
     "concurrently": "^10.0.3",
     "typescript": "^5.4.5"
+  },
+  "overrides": {
+    "postcss": "^8.5.10"
   }
 }
