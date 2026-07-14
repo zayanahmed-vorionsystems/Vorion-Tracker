@@ -216,7 +216,7 @@ let heartbeatInterval:  NodeJS.Timeout|null = null;
 let policyInterval:     NodeJS.Timeout|null = null;
 let scanInterval:       NodeJS.Timeout|null = null;
 let policySyncInterval: NodeJS.Timeout|null = null;
-let captureIntervalSec = parseInt(get('captureIntervalSec')||'2');
+let captureIntervalSec = parseInt(get('captureIntervalSec')||'5');
 let lastActiveApp    = 'Unknown';
 let lastActivityPct  = 100;
 let cachedPolicy:         any   = null;
@@ -640,14 +640,17 @@ async function scanBlockedApps() {
       const np = normalizeProcessName(processName);
       if (!np || !blockedNames.includes(np)) continue;
       const now = Date.now();
-      const lastHandledAt = recentlyHandledProcesses.get(np) || 0;
-      if (now - lastHandledAt < 15000) continue;
+      if (recentlyHandledProcesses.has(np)) continue;
 
       violationFound = true;
       recentlyHandledProcesses.set(np, now);
       console.log(`[SECURITY] 🚨 Found blocked process: ${processName}`);
       if (cachedPolicy.showWarning) {
-        dialog.showMessageBoxSync({ type:'warning', title:'Blocked Application', message:`"${processName}" is blocked by your organization and will be closed.` });
+        dialog.showMessageBoxSync({
+          type:'warning',
+          title:'Blocked Application',
+          message:`"${processName}" is blocked and was closed by Vorion Tracker.`,
+        });
       }
       if (cachedPolicy.killProcess) {
         await new Promise<void>((resolve) => {

@@ -112,7 +112,11 @@ export async function GET(req: NextRequest) {
         }
 
         for (const row of assignedEmployees || []) {
-          const shiftWindows = getShiftWindowsForUtcRange(dayRange.start, dayRange.end, row.assignment_shift_type || 'full_time');
+          const shiftWindows = getShiftWindowsForUtcRange(
+            dayRange.start,
+            dayRange.end,
+            row.assignment_shift_type || 'full_time',
+          );
           const visibleScreenshots = (screenshotsByEmployee.get(row.id) || []).filter((shot: any) =>
             isScreenshotWithinShiftInPkt(shot.captured_at, row.assignment_shift_type || 'full_time'),
           );

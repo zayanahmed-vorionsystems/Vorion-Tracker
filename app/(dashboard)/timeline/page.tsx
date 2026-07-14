@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/auth';
 import { normalizeRole } from '@/lib/roles';
-import { getCurrentDateInTimeZone, getTimeZoneDisplayName, useUserTimeZone } from '@/lib/timezone-client';
 
 function fmt(secs: number) {
   if (!secs) return '-';
@@ -29,18 +28,19 @@ export default function TimelinePage() {
   const { token, user } = useAuthStore();
   const role = normalizeRole(user?.role);
   const isClient = role === 'client';
-  const timeZoneInfo = useUserTimeZone();
-  const clientTimeZone = timeZoneInfo.timezone;
+  const clientTimeZone = typeof window === 'undefined'
+    ? 'America/New_York'
+    : Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
   const [rows, setRows] = useState<any[]>([]);
-  const [date, setDate] = useState(() => getCurrentDateInTimeZone(clientTimeZone));
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!token) return;
     setLoading(true);
-    const params = new URLSearchParams({ type: 'daily', date });
+    const params = new URLSearchParams();
     if (isClient) params.set('tz', clientTimeZone);
-    fetch(`/api/reports?${params.toString()}`, {
+    const query = params.toString();
+    fetch(query ? `/api/reports?${query}` : '/api/reports', {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.json())
@@ -52,7 +52,7 @@ export default function TimelinePage() {
         setRows([]);
         setLoading(false);
       });
-  }, [clientTimeZone, date, isClient, token]);
+  }, [clientTimeZone, isClient, token]);
 
   function pct(seconds: number) {
     return Math.min(100, (seconds / DAY_S) * 100);
@@ -71,7 +71,6 @@ export default function TimelinePage() {
         >
           {isClient ? 'Assigned VA Timeline' : 'Employee Timeline'}
         </h1>
-        <div style={{ color: COLORS.textMuted, fontSize: 12 }}>{getTimeZoneDisplayName(timeZoneInfo)}</div>
         <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 14 }}>
             {LEGEND.map((legend) => (
@@ -95,22 +94,6 @@ export default function TimelinePage() {
               </span>
             ))}
           </div>
-          <input
-            type="date"
-            value={date}
-            onChange={(event) => setDate(event.target.value)}
-            style={{
-              padding: '10px 14px',
-              borderRadius: 14,
-              border: '1px solid rgba(255,255,255,.08)',
-              background: 'rgba(255,255,255,.05)',
-              backdropFilter: 'blur(10px)',
-              color: '#F8FAFC',
-              fontSize: 13,
-              transition: 'all .2s ease',
-              outline: 'none',
-            }}
-          />
         </div>
       </div>
 
@@ -146,7 +129,7 @@ export default function TimelinePage() {
         {loading ? (
           <div style={{ padding: 48, textAlign: 'center', color: COLORS.textMuted, fontSize: 13 }}>Loading...</div>
         ) : rows.length === 0 ? (
-          <div style={{ padding: 48, textAlign: 'center', color: COLORS.textMuted, fontSize: 13 }}>No data for this date</div>
+          <div style={{ padding: 48, textAlign: 'center', color: COLORS.textMuted, fontSize: 13 }}>No data available</div>
         ) : (
           rows.map((row) => (
             <div

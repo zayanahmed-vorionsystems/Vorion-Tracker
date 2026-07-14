@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/auth';
-import { formatDateTimeInTimeZone, getTimeZoneDisplayName, useUserTimeZone } from '@/lib/timezone-client';
 
 const BRAND = {
   black: '#0A0E1A',
@@ -15,7 +14,6 @@ const BRAND = {
 
 export default function FlagsPage() {
   const { token } = useAuthStore();
-  const timeZoneInfo = useUserTimeZone();
   const [flags, setFlags] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -44,7 +42,7 @@ export default function FlagsPage() {
     <div>
       <h1 style={{ fontSize: 30, fontWeight: 800, color: BRAND.white, marginTop: 0 }}>Flagged Screenshots</h1>
       <p style={{ color: BRAND.muted, marginTop: 0, marginBottom: 18 }}>
-        Review all screenshot flags raised by QA teams. {getTimeZoneDisplayName(timeZoneInfo)}
+        Review all screenshot flags raised by QA teams.
       </p>
 
       <div style={{
@@ -94,13 +92,13 @@ export default function FlagsPage() {
                   </td>
                   <td style={{ padding: '14px 16px', color: BRAND.white }}>{flag.employee_name}</td>
                   <td style={{ padding: '14px 16px', color: BRAND.white }}>{flag.flagged_by_name}</td>
-                  <td style={{ padding: '14px 16px', color: BRAND.white }}>{formatDateTimeInTimeZone(flag.captured_at, timeZoneInfo.timezone)}</td>
+                  <td style={{ padding: '14px 16px', color: BRAND.white }}>{new Date(flag.captured_at).toLocaleString()}</td>
                   <td style={{ padding: '14px 16px', color: BRAND.white }}>{flag.comment}</td>
                   <td style={{ padding: '14px 16px', color: BRAND.white }}>
                     {flag.pdf_url ? <a href={flag.pdf_url} target="_blank" rel="noopener noreferrer" style={{ color: '#93C5FD' }}>{flag.pdf_name || 'Open PDF'}</a> : '—'}
                   </td>
                   <td style={{ padding: '14px 16px', color: BRAND.white }}>
-                    {flag.email_sent_at ? `Sent ${formatDateTimeInTimeZone(flag.email_sent_at, timeZoneInfo.timezone)}` : 'Not sent'}
+                    {flag.email_sent_at ? `Sent ${new Date(flag.email_sent_at).toLocaleString()}` : 'Not sent'}
                   </td>
                 </tr>
               ))}

@@ -5,7 +5,6 @@ import { useAuthStore } from '@/store/auth';
 import { supabaseClient } from '@/lib/supabase';
 import { fmtCompact, fmtPrecise, timeAgo } from './timeUtils';
 import { normalizeRole } from '@/lib/roles';
-import { formatDateTimeInTimeZone, formatTimeInTimeZone, getCurrentDateInTimeZone, getTimeZoneDisplayName, useUserTimeZone } from '@/lib/timezone-client';
 
 function fmt(secs: number) {
   if (!secs) return '0h 0m';
@@ -161,10 +160,10 @@ radial-gradient(circle at bottom right,${BRAND.yellowSoft} 0%,transparent 40%)
 export default function DashboardPage() {
   const { token, user } = useAuthStore();
   const role = normalizeRole(user?.role);
-  const timeZoneInfo = useUserTimeZone();
-  const clientTimeZone = timeZoneInfo.timezone;
+  const clientTimeZone = typeof window === 'undefined'
+    ? 'America/New_York'
+    : Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
   const [rows,       setRows]       = useState<any[]>([]);
-  const [date,       setDate]       = useState(() => getCurrentDateInTimeZone(clientTimeZone));
   const [loading,    setLoading]    = useState(true);
   const [precise,    setPrecise]    = useState(false);
   const [lastSynced, setLastSynced] = useState<Date | null>(null);
@@ -205,9 +204,10 @@ export default function DashboardPage() {
   // ── Fetch logic extracted into a stable callback ──────────────────────
   const fetchData = useCallback(() => {
     if (!token) return;
-    const params = new URLSearchParams({ type: 'daily', date });
+    const params = new URLSearchParams();
     if (role === 'client') params.set('tz', clientTimeZone);
-    fetch(`/api/reports?${params.toString()}`, {
+    const query = params.toString();
+    fetch(query ? `/api/reports?${query}` : '/api/reports', {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(async r => {
@@ -236,7 +236,7 @@ export default function DashboardPage() {
         setRows([]);
         setLoading(false);
       });
-  }, [clientTimeZone, date, role, token, normalizeStatus]);
+  }, [clientTimeZone, role, token, normalizeStatus]);
 
   // Initial fetch whenever date or token changes
   useEffect(() => {
@@ -322,17 +322,11 @@ export default function DashboardPage() {
           </h1>
           <p style={styles.subtext}>
             {role === 'client'
-              ? `Review the assigned VA activity below. ${getTimeZoneDisplayName(timeZoneInfo)}`
+              ? 'Review the assigned VA activity below.'
               : "Welcome back — here's your team overview"}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <input
-            type="date"
-            value={date}
-            onChange={e => setDate(e.target.value)}
-            style={styles.dateInput}
-          />
           <button
             onClick={() => {
               setPrecise(p => {
@@ -402,7 +396,7 @@ export default function DashboardPage() {
       {/* Table card */}
       <div style={styles.tableCard}>
         <div style={styles.tableHeader}>
-          <span>{role === 'client' ? `Assigned VA Summary — ${date}` : `Employee Summary — ${date}`}</span>
+          <span>{role === 'client' ? 'Assigned VA Summary' : 'Employee Summary'}</span>
           {lastSynced && (
             <span style={{ fontSize: 11, color: BRAND.mutedFaint, fontWeight: 400 }}>
               Last synced: {lastSynced.toLocaleTimeString()} · auto-refreshes every 60s
@@ -508,7 +502,7 @@ export default function DashboardPage() {
               {!rows.length && (
                 <tr>
                   <td colSpan={6} style={styles.emptyState}>
-                    No data for this date
+                    No data available
                   </td>
                 </tr>
               )}

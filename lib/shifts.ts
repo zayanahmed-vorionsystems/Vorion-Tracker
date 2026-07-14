@@ -5,8 +5,8 @@ export type TimeWindow = { startIso: string; endIso: string };
 const PKT_TIME_ZONE = 'Asia/Karachi';
 
 function addDays(date: string, days: number) {
-  const base = new Date(`${date}T00:00:00+05:00`);
-  base.setUTCDate(base.getUTCDate() + days);
+  const [year, month, day] = date.split('-').map(Number);
+  const base = new Date(Date.UTC(year, month - 1, day + days));
   return base.toISOString().slice(0, 10);
 }
 

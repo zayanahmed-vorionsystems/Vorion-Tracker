@@ -234,7 +234,7 @@ export default function App() {
               <button onClick={() => window.agent?.checkout()} style={{ width:'100%', padding:16, borderRadius:16, border:'1px solid rgba(255,92,122,0.25)', background:'linear-gradient(135deg, #7f1d1d 0%, #ef4444 100%)', color:'#fff', fontSize:15, fontWeight:700, cursor:'pointer', boxShadow:'0 0 16px rgba(239,68,68,0.16)' }}>Checkout</button>
             </div>
 
-            <p style={{ marginTop:22, fontSize:12, color:'#64748b', lineHeight:1.75 }}>Signed in as {userName}. Screenshots every 2 seconds, active app tracking, heartbeat, and agent status are emitted to the admin dashboard in real time.</p>
+            <p style={{ marginTop:22, fontSize:12, color:'#64748b', lineHeight:1.75 }}>Signed in as {userName}. Screenshots every 5 seconds, active app tracking, heartbeat, and agent status are emitted to the admin dashboard in real time.</p>
           </>
         ) : (
           <div style={{ display:'grid', gap:12 }}>
@@ -265,7 +265,7 @@ export default function App() {
           </div>
         )}
 
-        <p style={{ marginTop:22, fontSize:12, color:'#64748b', lineHeight:1.75 }}>Screenshots every 2 seconds, app tracking, website tracking, heartbeat, and monitoring run silently in the background. The admin dashboard receives real-time status updates.</p>
+        <p style={{ marginTop:22, fontSize:12, color:'#64748b', lineHeight:1.75 }}>Screenshots every 5 seconds, app tracking, website tracking, heartbeat, and monitoring run silently in the background. The admin dashboard receives real-time status updates.</p>
       </div>
     </div>
   );

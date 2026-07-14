@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/auth';
 import { canCreateScreenshotFlags, canSendFlagReports, normalizeRole } from '@/lib/roles';
 import { useRouter } from 'next/navigation';
-import { formatDateTimeInTimeZone, formatTimeInTimeZone, getCurrentDateInTimeZone, getTimeZoneDisplayName, useUserTimeZone } from '@/lib/timezone-client';
 
 // ---- Vorion Brand Palette (kept consistent with sidebar layout & dashboard) ----
 const BRAND = {
@@ -24,11 +23,8 @@ const BRAND = {
 export default function ScreenshotsPage() {
   const { token, user } = useAuthStore();
   const router = useRouter();
-  const timeZoneInfo = useUserTimeZone();
-  const clientTimeZone = timeZoneInfo.timezone;
   const [shots,   setShots]   = useState<any[]>([]);
   const [users,   setUsers]   = useState<any[]>([]);
-  const [date,    setDate]    = useState(() => getCurrentDateInTimeZone(clientTimeZone));
   const [userId,  setUserId]  = useState('');
   const [preview, setPreview] = useState<string|null>(null);
   const [loading, setLoading] = useState(false);
@@ -42,6 +38,9 @@ export default function ScreenshotsPage() {
   const [flagSaving, setFlagSaving] = useState(false);
   const role = normalizeRole(user?.role);
   const isClient = role === 'client';
+  const clientTimeZone = typeof window === 'undefined'
+    ? 'America/New_York'
+    : Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
   const canFlag = canCreateScreenshotFlags(role);
   const canEmailFlag = canSendFlagReports(role);
 
@@ -67,7 +66,7 @@ export default function ScreenshotsPage() {
         setLoading(false);
         return;
       }
-      const p = new URLSearchParams({ date, limit: '80' });
+      const p = new URLSearchParams({ limit: '80' });
       if (userId) p.set('userId', userId);
       if (isClient) p.set('tz', clientTimeZone);
       try {
@@ -89,7 +88,7 @@ export default function ScreenshotsPage() {
       }
     };
     loadScreenshots();
-  }, [clientTimeZone, date, isClient, token, userId]);
+  }, [clientTimeZone, isClient, token, userId]);
 
   return (
     <div>
@@ -97,7 +96,6 @@ export default function ScreenshotsPage() {
         <h1 style={{ fontSize: 28, fontWeight: 800, color: BRAND.white, margin: 0, flex: 1 }}>
           {isClient ? 'Assigned VA Screenshots' : 'Screenshots'}
         </h1>
-        <div style={{ color: BRAND.muted, fontSize: 12 }}>{getTimeZoneDisplayName(timeZoneInfo)}</div>
         <select value={userId} onChange={e=>setUserId(e.target.value)}
           style={{
             padding: '12px 14px',
@@ -117,17 +115,6 @@ export default function ScreenshotsPage() {
           </option>
           {users.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
         </select>
-        <input type="date" value={date} onChange={e=>setDate(e.target.value)}
-          style={{
-            padding: '8px 12px',
-            borderRadius: 12,
-            border: `1px solid ${BRAND.border}`,
-            background: 'rgba(245,247,250,.06)',
-            color: BRAND.white,
-            fontSize: 13,
-            outline: 'none',
-            cursor: 'pointer',
-          }}/>
       </div>
 
       {loading ? (
@@ -178,7 +165,7 @@ export default function ScreenshotsPage() {
                 <div style={{ fontSize:14, fontWeight:700, color:BRAND.white, marginBottom:2 }}>{s.user_name}</div>
                 <div style={{ fontSize:10, color:BRAND.mutedFaint, display:'flex', justifyContent:'space-between' }}>
                   <span>{s.active_app||'—'}</span>
-                  <span>{formatTimeInTimeZone(s.captured_at, clientTimeZone)}</span>
+                  <span>{new Date(s.captured_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>
                 </div>
                 <div style={{ marginTop:4,height:3,background:BRAND.black,borderRadius:2 }}>
                   <div style={{
@@ -219,7 +206,7 @@ export default function ScreenshotsPage() {
           ))}
           {!shots.length && (
             <div style={{ gridColumn:'1/-1',textAlign:'center',padding:60,color:BRAND.mutedFaint,fontSize:13 }}>
-              No screenshots found for the selected date.
+              No screenshots found.
             </div>
           )}
         </div>
@@ -255,7 +242,7 @@ export default function ScreenshotsPage() {
           }}>
             <h2 style={{ color: BRAND.white, marginTop: 0 }}>Flag Screenshot</h2>
             <p style={{ color: BRAND.muted, fontSize: 13 }}>
-              {flagging.user_name} · {formatDateTimeInTimeZone(flagging.captured_at, clientTimeZone)}
+              {flagging.user_name} · {new Date(flagging.captured_at).toLocaleString()}
             </p>
             <textarea
               value={flagComment}

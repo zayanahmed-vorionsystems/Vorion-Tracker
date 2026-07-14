@@ -30,8 +30,11 @@ export async function POST(req: NextRequest) {
 
   try {
     const roomName = getLiveKitRoomName(attendance.employee_id, attendance.id);
+    const viewerConnectionId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     const token = await createLiveKitToken({
-      identity: `viewer-${user.sub}-${employeeId}`,
+      identity: `viewer-${user.sub}-${employeeId}-${viewerConnectionId}`,
       roomName,
       canPublish: false,
       canSubscribe: true,
