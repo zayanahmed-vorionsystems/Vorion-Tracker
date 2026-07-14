@@ -244,11 +244,11 @@ export default function DashboardPage() {
     fetchData();
   }, [fetchData]);
 
-  // ── Auto-refresh every 60 seconds for active sessions ─────────────────
+  // ── API refresh fallback (faster for restricted client views) ─────────
   useEffect(() => {
-    const id = setInterval(fetchData, 60_000);
+    const id = setInterval(fetchData, role === 'client' ? 15_000 : 60_000);
     return () => clearInterval(id);
-  }, [fetchData]);
+  }, [fetchData, role]);
 
   // ── Live status updates from Supabase Realtime ───────────────────────
   useEffect(() => {
@@ -399,7 +399,7 @@ export default function DashboardPage() {
           <span>{role === 'client' ? 'Assigned VA Summary' : 'Employee Summary'}</span>
           {lastSynced && (
             <span style={{ fontSize: 11, color: BRAND.mutedFaint, fontWeight: 400 }}>
-              Last synced: {lastSynced.toLocaleTimeString()} · auto-refreshes every 60s
+              Last synced: {lastSynced.toLocaleTimeString()} · auto-refreshes every {role === 'client' ? '15s' : '60s'}
             </span>
           )}
         </div>

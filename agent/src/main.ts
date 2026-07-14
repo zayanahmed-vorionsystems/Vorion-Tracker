@@ -6,7 +6,7 @@ import path from 'path';
 import { app } from 'electron';
 import {
    BrowserWindow, Tray, Menu, nativeImage,
-  ipcMain, powerMonitor, desktopCapturer, screen, shell, dialog
+  ipcMain, powerMonitor, desktopCapturer, screen, shell, dialog, safeStorage
 } from 'electron';
 import os from 'os';
 import https from 'https';
@@ -32,6 +32,10 @@ function getAncestorEnvCandidates(baseDir: string) {
 }
 
 function loadAgentEnv() {
+  // Packaged builds carry generated embedded configuration. Loading .env files
+  // from the launch directory lets an unrelated local file redirect credentials.
+  if (app.isPackaged) return;
+
   const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR || '';
   const executableDir = process.execPath ? path.dirname(process.execPath) : '';
   const cwd = process.cwd();
@@ -159,6 +163,10 @@ const SERVER_URL = (() => {
 
   if (!normalizedConfiguredUrl) return fallbackServerUrl;
   if (!isDev && isLocalServerUrl(normalizedConfiguredUrl)) return 'https://tracker.vorionsystems.com/';
+  if (!isDev && new URL(normalizedConfiguredUrl).protocol !== 'https:') {
+    console.warn('[AGENT] refusing non-HTTPS server URL in packaged build');
+    return 'https://tracker.vorionsystems.com/';
+  }
 
   return normalizedConfiguredUrl;
 })();
@@ -172,10 +180,54 @@ function readStore(): Record<string,any> {
 }
 function writeStore(data: Record<string,any>) {
   fs.mkdirSync(DATA_DIR,{recursive:true});
-  fs.writeFileSync(STORE_PATH, JSON.stringify(data,null,2));
+  fs.writeFileSync(STORE_PATH, JSON.stringify(data,null,2), { encoding: 'utf8', mode: 0o600 });
+  try { fs.chmodSync(STORE_PATH, 0o600); } catch {}
 }
 function get(key:string)        { return readStore()[key]; }
 function set(key:string,val:any){ writeStore({...readStore(),[key]:val}); }
+function remove(key:string) {
+  const data = readStore();
+  delete data[key];
+  writeStore(data);
+}
+
+function storeAuthToken(nextToken: string) {
+  token = nextToken;
+  if (!nextToken) {
+    remove('token');
+    remove('tokenEncrypted');
+    return;
+  }
+
+  if (safeStorage.isEncryptionAvailable()) {
+    set('tokenEncrypted', safeStorage.encryptString(nextToken).toString('base64'));
+    remove('token');
+    return;
+  }
+
+  // Preserve compatibility on Linux desktops without a secret service while
+  // restricting the fallback file to the current OS user.
+  console.warn('[AUTH] OS credential encryption unavailable; using a user-only token file');
+  set('token', nextToken);
+  remove('tokenEncrypted');
+}
+
+function loadStoredAuthToken() {
+  const encrypted = get('tokenEncrypted');
+  if (typeof encrypted === 'string' && encrypted) {
+    try {
+      return safeStorage.decryptString(Buffer.from(encrypted, 'base64'));
+    } catch (error) {
+      console.warn('[AUTH] encrypted token could not be decrypted; clearing it', formatError(error));
+      remove('tokenEncrypted');
+    }
+  }
+
+  const legacyToken = get('token');
+  if (typeof legacyToken !== 'string' || !legacyToken) return '';
+  storeAuthToken(legacyToken);
+  return legacyToken;
+}
 
 function getEmployeeIdFromUser(user: any): string {
   const candidate = user?.id || user?.employeeId || user?.employee_id || user?.userId || user?.employee?.id || user?.employee?.employeeId || user?.employee?.employee_id || '';
@@ -184,8 +236,7 @@ function getEmployeeIdFromUser(user: any): string {
 
 function persistSessionIdentity(nextToken?: string, nextUserName?: string, nextEmployeeId?: string) {
   if (typeof nextToken === 'string') {
-    token = nextToken;
-    set('token', token);
+    storeAuthToken(nextToken);
   }
   if (typeof nextUserName === 'string') {
     userName = nextUserName;
@@ -200,7 +251,7 @@ function persistSessionIdentity(nextToken?: string, nextUserName?: string, nextE
 // ─── State ─────────────────────────────────────────────────────────────────
 let tray:        Tray|null          = null;
 let mainWindow:  BrowserWindow|null = null;
-let token:       string             = get('token') || '';
+let token:       string             = '';
 let userName:    string             = get('userName') || '';
 let employeeId:  string             = get('employeeId') || '';
 let sessionId:   string             = '';
@@ -605,9 +656,9 @@ async function scanBlockedWebsites() {
 async function scanBlockedApps() {
   if (!token || !cachedPolicy || !cachedBlockedApps.length) return;
   try {
-    const { exec } = await import('child_process');
+    const { execFile } = await import('child_process');
     const output = await new Promise<string>((resolve, reject) => {
-      exec('wmic process get Name /FORMAT:CSV', { maxBuffer: 1024 * 1024 * 10 },
+      execFile('wmic', ['process', 'get', 'Name', '/FORMAT:CSV'], { maxBuffer: 1024 * 1024 * 10 },
         (error, stdout) => error ? reject(error) : resolve(stdout));
     });
     const runningProcesses = output.split(/\r?\n/).map((l:string) => l.trim()).filter(Boolean)
@@ -654,7 +705,7 @@ async function scanBlockedApps() {
       }
       if (cachedPolicy.killProcess) {
         await new Promise<void>((resolve) => {
-          exec(`taskkill /F /IM "${processName}"`, () => resolve());
+          execFile('taskkill', ['/F', '/IM', processName], () => resolve());
         });
         console.log(`[SECURITY] ✅ Process termination requested: ${processName}`);
       }
@@ -859,6 +910,7 @@ async function createWindow() {
       preload:preloadPath,
       contextIsolation:true,
       nodeIntegration:false,
+      sandbox:true,
       spellcheck:false,
     },
     show: false,
@@ -876,6 +928,10 @@ async function createWindow() {
   mainWindow.webContents.on('render-process-gone', (_, details) => {
     console.log('RENDERER CRASHED:', details);
   });
+  mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
+    if (targetUrl !== mainWindow?.webContents.getURL()) event.preventDefault();
+  });
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   if (isDev) {
     try {
@@ -934,7 +990,14 @@ async function createWindow() {
 }
 
 // ─── IPC ────────────────────────────────────────────────────────────────────
-ipcMain.handle('login', async (_e, email:string, password:string) => {
+function assertMainRenderer(event: Electron.IpcMainInvokeEvent) {
+  if (!mainWindow || event.sender.id !== mainWindow.webContents.id) {
+    throw new Error('Untrusted IPC sender');
+  }
+}
+
+ipcMain.handle('login', async (event, email:string, password:string) => {
+  assertMainRenderer(event);
   try {
     const res = await apiRequest('POST','/api/auth',{ email, password, context: 'agent' });
     if (!res?.token) throw new Error(res?.error || 'Login failed');
@@ -956,7 +1019,8 @@ ipcMain.handle('login', async (_e, email:string, password:string) => {
     return { ok:false, error: getFriendlyRequestError(error) };
   }
 });
-ipcMain.handle('logout', async () => {
+ipcMain.handle('logout', async (event) => {
+  assertMainRenderer(event);
   await stopTracking();
 
   if (token) {
@@ -965,23 +1029,24 @@ ipcMain.handle('logout', async () => {
     });
   }
 
-  token=''; userName=''; employeeId='';
-  set('token',''); set('userName',''); set('employeeId','');
+  storeAuthToken(''); userName=''; employeeId='';
+  set('userName',''); set('employeeId','');
   status='offline';
   mainWindow?.webContents.send('status-changed',{ status:'offline' });
   mainWindow?.show();
   return { ok:true };
 });
-ipcMain.handle('get-status',       () => ({ tracking, status, sessionId, userName, captureIntervalSec, idleSec: powerMonitor.getSystemIdleTime(), startedAt: status !== 'offline' ? Date.now() : null }));
-ipcMain.handle('get-alerts',       async () => getStoredAlerts());
-ipcMain.handle('sync-alerts',      async () => syncAlertsWithServer());
-ipcMain.handle('mark-alert-read',  async (_e, id:string) => markAlertRead(id));
-ipcMain.handle('store-alert',      async (_e, alert:any) => { const saved = await persistAlert(alert); mainWindow?.webContents.send('new-alert', saved); return saved; });
-ipcMain.handle('manual-shot',      () => captureAndUpload());
-ipcMain.handle('stop-tracking',    () => stopTracking());
-ipcMain.handle('start-tracking',   () => { status = 'active'; return startTracking(); });
-ipcMain.handle('start-work',       async () => { status = 'active'; await startTracking(); return { ok: true }; });
-ipcMain.handle('start-break',      async () => {
+ipcMain.handle('get-status',       (event) => { assertMainRenderer(event); return { tracking, status, sessionId, userName, captureIntervalSec, idleSec: powerMonitor.getSystemIdleTime(), startedAt: status !== 'offline' ? Date.now() : null }; });
+ipcMain.handle('get-alerts',       async (event) => { assertMainRenderer(event); return getStoredAlerts(); });
+ipcMain.handle('sync-alerts',      async (event) => { assertMainRenderer(event); return syncAlertsWithServer(); });
+ipcMain.handle('mark-alert-read',  async (event, id:string) => { assertMainRenderer(event); return markAlertRead(id); });
+ipcMain.handle('store-alert',      async (event, alert:any) => { assertMainRenderer(event); const saved = await persistAlert(alert); mainWindow?.webContents.send('new-alert', saved); return saved; });
+ipcMain.handle('manual-shot',      (event) => { assertMainRenderer(event); return captureAndUpload(); });
+ipcMain.handle('stop-tracking',    (event) => { assertMainRenderer(event); return stopTracking(); });
+ipcMain.handle('start-tracking',   (event) => { assertMainRenderer(event); status = 'active'; return startTracking(); });
+ipcMain.handle('start-work',       async (event) => { assertMainRenderer(event); status = 'active'; await startTracking(); return { ok: true }; });
+ipcMain.handle('start-break',      async (event) => {
+  assertMainRenderer(event);
   status = 'break';
   ssInterval = clearTimer(ssInterval);
   heartbeatInterval = clearTimer(heartbeatInterval);
@@ -989,7 +1054,8 @@ ipcMain.handle('start-break',      async () => {
   broadcastStatus();
   return { ok: true };
 });
-ipcMain.handle('end-break', async () => {
+ipcMain.handle('end-break', async (event) => {
+  assertMainRenderer(event);
   status = 'active';
   await sessionAction('end_break', { sessionId });
   ssInterval = clearTimer(ssInterval);
@@ -999,7 +1065,8 @@ ipcMain.handle('end-break', async () => {
   broadcastStatus();
   return { ok: true };
 });
-ipcMain.handle('checkout', async () => {
+ipcMain.handle('checkout', async (event) => {
+  assertMainRenderer(event);
   if (tracking) {
     await stopTracking();
     return { ok: true };
@@ -1022,7 +1089,7 @@ app.whenReady().then(async ()=>{
   updateTray();
   mainWindow?.show();
   status = 'offline';
-  const storedToken = get('token') || '';
+  const storedToken = loadStoredAuthToken();
   const storedUserName = get('userName') || '';
   const storedEmployeeId = get('employeeId') || '';
   if (storedToken) {
@@ -1033,8 +1100,8 @@ app.whenReady().then(async ()=>{
       mainWindow?.webContents.send('status-changed', { status, userName, employeeId });
     } catch {
       console.log('Stored token invalid/expired — clearing, user must log in again');
-      token=''; userName=''; employeeId='';
-      set('token',''); set('userName',''); set('employeeId','');
+      storeAuthToken(''); userName=''; employeeId='';
+      set('userName',''); set('employeeId','');
       status = 'offline';
       mainWindow?.webContents.send('status-changed', { status:'offline' });
     }

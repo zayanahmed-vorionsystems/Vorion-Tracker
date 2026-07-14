@@ -1,8 +1,9 @@
 import type { ShiftType } from './roles';
 
 export type TimeWindow = { startIso: string; endIso: string };
+export type ShiftWindow = { start: Date; end: Date };
 
-const PKT_TIME_ZONE = 'Asia/Karachi';
+export const BUSINESS_TIME_ZONE = 'Asia/Karachi';
 
 function addDays(date: string, days: number) {
   const [year, month, day] = date.split('-').map(Number);
@@ -56,31 +57,40 @@ function zonedDateTimeToUtc(date: string, time: string, timeZone: string) {
   return new Date(guess.getTime() - secondOffset);
 }
 
-function enumerateDates(start: string, end: string) {
-  const dates: string[] = [];
-  let current = start;
-
-  while (current <= end) {
-    dates.push(current);
-    current = addDays(current, 1);
-  }
-
-  return dates;
+export function getLocalDateInTimeZone(date: Date, timeZone: string) {
+  const parts = formatPartsInTimeZone(date, timeZone);
+  return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-function getHourInPkt(timestamp: string | Date) {
-  const parts = formatPartsInTimeZone(new Date(timestamp), PKT_TIME_ZONE);
-  return Number(parts.hour);
+export function getShiftDateInTimeZone(date: Date, timeZone: string = BUSINESS_TIME_ZONE) {
+  const parts = formatPartsInTimeZone(date, timeZone);
+  const localDate = `${parts.year}-${parts.month}-${parts.day}`;
+  const hour = Number(parts.hour);
+
+  if (hour < 5) return addDays(localDate, -1);
+  return localDate;
+}
+
+export function getBusinessDayRange(date: string, timeZone: string = BUSINESS_TIME_ZONE) {
+  const start = zonedDateTimeToUtc(date, '05:00:00', timeZone);
+  const end = zonedDateTimeToUtc(addDays(date, 1), '05:00:00', timeZone);
+
+  return {
+    start,
+    end,
+    startIso: start.toISOString(),
+    endIso: end.toISOString(),
+  };
 }
 
 export function getClientShiftWindows(date: string, shiftType: ShiftType): TimeWindow[] {
   const firstHalf = {
-    startIso: `${date}T08:00:00+05:00`,
-    endIso: `${date}T12:00:00+05:00`,
+    startIso: `${date}T20:00:00+05:00`,
+    endIso: `${addDays(date, 1)}T00:00:00+05:00`,
   };
   const secondHalf = {
-    startIso: `${date}T13:00:00+05:00`,
-    endIso: `${date}T17:00:00+05:00`,
+    startIso: `${addDays(date, 1)}T01:00:00+05:00`,
+    endIso: `${addDays(date, 1)}T05:00:00+05:00`,
   };
 
   if (shiftType === 'first_half') return [firstHalf];
@@ -100,25 +110,27 @@ export function getUtcRangeForLocalDate(date: string, timeZone: string) {
   };
 }
 
-export function isScreenshotWithinShiftInPkt(capturedAt: string, shiftType: ShiftType) {
-  const hour = getHourInPkt(capturedAt);
-
-  if (shiftType === 'first_half') return hour >= 8 && hour < 12;
-  if (shiftType === 'second_half') return hour >= 13 && hour < 17;
-  return (hour >= 8 && hour < 12) || (hour >= 13 && hour < 17);
+export function getShiftWindowsForDate(date: string, shiftType: ShiftType): ShiftWindow[] {
+  return getClientShiftWindows(date, shiftType).map((window) => ({
+    start: new Date(window.startIso),
+    end: new Date(window.endIso),
+  }));
 }
 
-export function getShiftWindowsForUtcRange(rangeStart: Date, rangeEnd: Date, shiftType: ShiftType) {
-  const pktStartDate = formatPartsInTimeZone(new Date(rangeStart.getTime() - 24 * 60 * 60 * 1000), PKT_TIME_ZONE);
-  const pktEndDate = formatPartsInTimeZone(new Date(rangeEnd.getTime() + 24 * 60 * 60 * 1000), PKT_TIME_ZONE);
-  const startDate = `${pktStartDate.year}-${pktStartDate.month}-${pktStartDate.day}`;
-  const endDate = `${pktEndDate.year}-${pktEndDate.month}-${pktEndDate.day}`;
+export function getShiftRangeForDate(date: string, shiftType: ShiftType) {
+  const windows = getShiftWindowsForDate(date, shiftType);
+  const start = new Date(Math.min(...windows.map((window) => window.start.getTime())));
+  const end = new Date(Math.max(...windows.map((window) => window.end.getTime())));
 
-  return enumerateDates(startDate, endDate)
-    .flatMap((date) => getClientShiftWindows(date, shiftType))
-    .map((window) => ({
-      start: new Date(window.startIso),
-      end: new Date(window.endIso),
-    }))
-    .filter((window) => window.start < rangeEnd && window.end > rangeStart);
+  return {
+    start,
+    end,
+    startIso: start.toISOString(),
+    endIso: end.toISOString(),
+  };
+}
+
+export function isTimestampWithinShiftWindows(timestamp: string | Date, windows: ShiftWindow[]) {
+  const value = new Date(timestamp).getTime();
+  return windows.some((window) => value >= window.start.getTime() && value < window.end.getTime());
 }

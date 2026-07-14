@@ -5,7 +5,20 @@ import { requireAuth, ok, err } from '@/lib/api';
 import { assertSupabaseAdmin } from '@/lib/supabase';
 import { emitSocketEvent } from '@/lib/socket';
 import { canDeleteRecords, canMonitorAll, normalizeRole } from '@/lib/roles';
-import { getUtcRangeForLocalDate, isScreenshotWithinShiftInPkt } from '@/lib/shifts';
+import {
+  BUSINESS_TIME_ZONE,
+  getLocalDateInTimeZone,
+  getShiftDateInTimeZone,
+  getShiftRangeForDate,
+  getShiftWindowsForDate,
+} from '@/lib/shifts';
+
+const MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024;
+
+function isAllowedScreenshotType(type: string) {
+  const normalized = String(type || '').trim().toLowerCase();
+  return normalized === 'image/png' || normalized === 'image/jpeg';
+}
 
 export async function POST(req: NextRequest) {
   if (!process.env.DATABASE_URL) return err('Server misconfigured: DATABASE_URL not set', 500);
@@ -24,6 +37,11 @@ export async function POST(req: NextRequest) {
     const actPct    = parseInt(formData.get('activityPct') as string || '0');
 
     if (!file) return err('No screenshot file');
+    if (file.size <= 0) return err('Screenshot file is empty', 400);
+    if (file.size > MAX_SCREENSHOT_BYTES) return err('Screenshot file is too large', 413);
+    if (!isAllowedScreenshotType(file.type || '')) {
+      return err('Unsupported screenshot file type', 400);
+    }
 
     const arrayBuffer = await file.arrayBuffer();
     const buffer      = Buffer.from(arrayBuffer);
@@ -73,9 +91,20 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const filterUserId = searchParams.get('userId');
-    const date         = searchParams.get('date') ?? new Date().toISOString().slice(0, 10);
-    const limit        = parseInt(searchParams.get('limit') || '60');
+    const requestedDate = searchParams.get('date');
+    const requestedLimit = parseInt(searchParams.get('limit') || '60', 10);
+    const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 200) : 60;
+    const before = searchParams.get('before');
+    const beforeDate = before ? new Date(before) : null;
+    if (beforeDate && Number.isNaN(beforeDate.getTime())) return err('Invalid pagination cursor', 400);
+    const beforeIso = beforeDate?.toISOString() || '9999-12-31T23:59:59.999Z';
     const timeZone     = searchParams.get('tz') || 'America/New_York';
+    const effectiveTimeZone = role === 'client' ? BUSINESS_TIME_ZONE : timeZone;
+    const date = requestedDate ?? (
+      role === 'client'
+        ? getShiftDateInTimeZone(new Date(), effectiveTimeZone)
+        : getLocalDateInTimeZone(new Date(), effectiveTimeZone)
+    );
 
     let rows;
 
@@ -86,11 +115,11 @@ export async function GET(req: NextRequest) {
         JOIN public.profiles p ON p.id = s.employee_id
         WHERE s.employee_id = ${sub}
           AND DATE(s.captured_at) = ${date}
+          AND s.captured_at < ${beforeIso}
         ORDER BY s.captured_at DESC
         LIMIT ${limit}
       `;
     } else if (role === 'client') {
-      const dayRange = getUtcRangeForLocalDate(date, timeZone);
       const assignedRows = filterUserId
         ? await sql`
             SELECT p.id, ca.shift_type AS assignment_shift_type
@@ -112,21 +141,32 @@ export async function GET(req: NextRequest) {
 
       const allRows: any[] = [];
       for (const assigned of assignedRows) {
+        const shiftType = assigned.assignment_shift_type || 'full_time';
+        const shiftRange = getShiftRangeForDate(date, shiftType);
+        const shiftWindows = getShiftWindowsForDate(date, shiftType);
+        const firstWindow = shiftWindows[0];
+        const secondWindow = shiftWindows[1] || firstWindow;
+        const hasSecondWindow = shiftWindows.length > 1;
         const chunk = await sql`
           SELECT s.id, s.employee_id, s.file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
           FROM screenshots s
           JOIN public.profiles p ON p.id = s.employee_id
           WHERE s.employee_id = ${assigned.id}
-            AND s.captured_at >= ${dayRange.startIso}
-            AND s.captured_at < ${dayRange.endIso}
+            AND s.captured_at >= ${shiftRange.startIso}
+            AND s.captured_at < ${shiftRange.endIso}
+            AND s.captured_at < ${beforeIso}
+            AND (
+              (s.captured_at >= ${firstWindow.start.toISOString()} AND s.captured_at < ${firstWindow.end.toISOString()})
+              OR (
+                ${hasSecondWindow}
+                AND s.captured_at >= ${secondWindow.start.toISOString()}
+                AND s.captured_at < ${secondWindow.end.toISOString()}
+              )
+            )
           ORDER BY s.captured_at DESC
           LIMIT ${limit}
         `;
-        allRows.push(
-          ...chunk.filter((row: any) =>
-            isScreenshotWithinShiftInPkt(row.captured_at, assigned.assignment_shift_type || 'full_time'),
-          ),
-        );
+        allRows.push(...chunk);
       }
 
       rows = allRows
@@ -140,6 +180,7 @@ export async function GET(req: NextRequest) {
           JOIN public.profiles p ON p.id = s.employee_id
           WHERE s.employee_id = ${filterUserId}
             AND DATE(s.captured_at) = ${date}
+            AND s.captured_at < ${beforeIso}
           ORDER BY s.captured_at DESC
           LIMIT ${limit}
         `;
@@ -149,6 +190,7 @@ export async function GET(req: NextRequest) {
           FROM screenshots s
           JOIN public.profiles p ON p.id = s.employee_id
           WHERE DATE(s.captured_at) = ${date}
+            AND s.captured_at < ${beforeIso}
           ORDER BY s.captured_at DESC
           LIMIT ${limit}
         `;

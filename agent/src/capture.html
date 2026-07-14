@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src https: wss: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; media-src 'self' blob:; img-src 'self' data: blob:; object-src 'none'; base-uri 'none'" />
     <title>WorkTrack Capture</title>
     <style>
       html, body { margin: 0; background: #000; color: #fff; font-family: sans-serif; }
@@ -12,15 +13,6 @@
   </head>
   <body>
     <div class="status" id="status">Initializing screen capture…</div>
-    <script>
-      window.addEventListener('DOMContentLoaded', () => {
-        const status = document.getElementById('status');
-        if (status) {
-          status.textContent = 'Loading capture renderer...';
-        }
-        console.log('[AGENT] capture.html DOM loaded');
-      });
-    </script>
     <script src="./capture-renderer.js"></script>
   </body>
 </html>

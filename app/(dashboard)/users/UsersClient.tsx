@@ -47,9 +47,9 @@ interface DepartmentItem {
 
 function getShiftLabel(shiftType: string) {
   const normalized = normalizeShiftType(shiftType);
-  if (normalized === 'first_half') return 'First Half (08:00-12:00 PKT)';
-  if (normalized === 'second_half') return 'Second Half (13:00-17:00 PKT)';
-  return 'Full Time (08:00-17:00 PKT)';
+  if (normalized === 'first_half') return 'First Half (20:00-00:00 PKT)';
+  if (normalized === 'second_half') return 'Second Half (01:00-05:00 PKT)';
+  return 'Full Time (20:00-00:00 & 01:00-05:00 PKT)';
 }
 
 function shiftsConflict(existingShift: string, nextShift: string) {

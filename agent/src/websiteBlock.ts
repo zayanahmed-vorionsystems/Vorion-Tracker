@@ -3,17 +3,19 @@ import fs   from 'fs';
 import path from 'path';
 import os   from 'os';
 import http from 'http';
+import crypto from 'crypto';
+import { execFile } from 'child_process';
 import { app } from 'electron';
 
 const PAC_DIR  = path.join(app.getPath('userData'), 'proxy');
 const PAC_PATH = path.join(PAC_DIR, 'worktrack-block.pac');
-const PAC_PORT = 7799;
 const DEAD_PORT = 9;
 
 let lastProxyDomainsKey = '';
 let pacServer: http.Server | null = null;
 let currentPacContent  = '';
 let proxyAppliedOnce   = false; // track if we've already killed Chrome once this session
+let pacPort = 0;
 
 // ─── PAC content ─────────────────────────────────────────────────────────────
 function buildPacContent(domains: string[]): string {
@@ -43,12 +45,17 @@ function buildPacContent(domains: string[]): string {
 }
 
 // ─── Local HTTP server (Chrome only trusts http:// PAC, not file:///) ────────
-function startPacServer(pacContent: string): Promise<void> {
+function startPacServer(pacContent: string): Promise<boolean> {
   return new Promise((resolve) => {
     currentPacContent = pacContent;
-    if (pacServer) { resolve(); return; }
+    if (pacServer) { resolve(true); return; }
 
-    pacServer = http.createServer((_req, res) => {
+    const nextServer = http.createServer((req, res) => {
+      if (req.url !== '/proxy.pac') {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not found');
+        return;
+      }
       res.writeHead(200, {
         'Content-Type'  : 'application/x-ns-proxy-autoconfig',
         'Cache-Control' : 'no-cache, no-store',
@@ -56,14 +63,18 @@ function startPacServer(pacContent: string): Promise<void> {
       res.end(currentPacContent);
     });
 
-    pacServer.listen(PAC_PORT, '127.0.0.1', () => {
-      console.log(`[SECURITY] PAC server listening on http://127.0.0.1:${PAC_PORT}/proxy.pac`);
-      resolve();
+    nextServer.listen(0, '127.0.0.1', () => {
+      const address = nextServer.address();
+      pacPort = typeof address === 'object' && address ? address.port : 0;
+      pacServer = nextServer;
+      console.log(`[SECURITY] PAC server listening on http://127.0.0.1:${pacPort}/proxy.pac`);
+      resolve(Boolean(pacPort));
     });
 
-    pacServer.on('error', (err: any) => {
+    nextServer.on('error', (err: any) => {
       console.warn('[SECURITY] PAC server error:', err?.message);
-      resolve();
+      nextServer.close();
+      resolve(false);
     });
   });
 }
@@ -71,14 +82,15 @@ function startPacServer(pacContent: string): Promise<void> {
 function stopPacServer() {
   pacServer?.close();
   pacServer = null;
+  pacPort = 0;
 }
 
 // ─── Registry (HKCU — no admin needed) ───────────────────────────────────────
 function applyProxyRegistry(enable: boolean): Promise<void> {
   return new Promise((resolve) => {
     if (process.platform !== 'win32') return resolve();
-    const { exec } = require('child_process');
-    const pacUrl = `http://127.0.0.1:${PAC_PORT}/proxy.pac`;
+    if (enable && !pacPort) return resolve();
+    const pacUrl = `http://127.0.0.1:${pacPort}/proxy.pac`;
 
     const lines = enable
       ? [
@@ -99,10 +111,10 @@ public class WI { [DllImport("wininet.dll")] public static extern bool InternetS
 [WI]::InternetSetOption([IntPtr]::Zero,37,[IntPtr]::Zero,0)|Out-Null`;
 
     const script = [...lines, refresh].join('\n');
-    const tmp = path.join(os.tmpdir(), `wt-proxy-${Date.now()}.ps1`);
-    fs.writeFileSync(tmp, script, 'utf8');
+    const tmp = path.join(os.tmpdir(), `wt-proxy-${crypto.randomUUID()}.ps1`);
+    fs.writeFileSync(tmp, script, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
 
-    exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${tmp}"`, (err: any) => {
+    execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', tmp], (err: any) => {
       try { fs.unlinkSync(tmp); } catch {}
       if (err) console.error('[SECURITY] Registry error:', err?.message || err);
       else     console.log(`[SECURITY] Proxy registry ${enable ? 'set → ' + pacUrl : 'cleared'}`);
@@ -125,8 +137,7 @@ function killChromeOnce(): Promise<void> {
     if (proxyAppliedOnce) return resolve(); // only do this once per session
     proxyAppliedOnce = true;
 
-    const { exec } = require('child_process');
-    exec('taskkill /F /IM chrome.exe', (err: any) => {
+    execFile('taskkill', ['/F', '/IM', 'chrome.exe'], (err: any) => {
       if (err) {
         // Chrome may not be running — that's fine
         console.log('[SECURITY] Chrome was not running (or already closed), proxy will apply on next launch');
@@ -159,7 +170,11 @@ export async function syncProxyBlock(cachedPolicy: any, cachedBlockedWebsites: a
   const pacContent = buildPacContent(domains);
   try { fs.mkdirSync(PAC_DIR, { recursive: true }); fs.writeFileSync(PAC_PATH, pacContent, 'utf8'); } catch {}
 
-  await startPacServer(pacContent);
+  const serverStarted = await startPacServer(pacContent);
+  if (!serverStarted) {
+    console.error('[SECURITY] Website block was not applied because the PAC server could not start');
+    return;
+  }
   await applyProxyRegistry(true);
   await killChromeOnce(); // <- one-time restart so Chrome picks up PAC
   console.log('[SECURITY] Website block active — domains:', domains.join(', '));

@@ -454,15 +454,15 @@ export async function PATCH(req: NextRequest) {
           const existingShift = normalizeShiftType(row.shift_type);
           return existingShift === 'full_time' || nextAssignmentShift === 'full_time' || existingShift === nextAssignmentShift;
         });
-        if (conflictingAssignment) {
-          const existingShift = normalizeShiftType(conflictingAssignment.shift_type);
-          const label = existingShift === 'first_half'
-            ? 'First Half (08:00-12:00 PKT)'
-            : existingShift === 'second_half'
-            ? 'Second Half (13:00-17:00 PKT)'
-            : 'Full Time (08:00-17:00 PKT)';
-          return err(`${conflictingAssignment.employee_name} is already assigned to ${conflictingAssignment.client_name} for ${label}.`, 409);
-        }
+          if (conflictingAssignment) {
+            const existingShift = normalizeShiftType(conflictingAssignment.shift_type);
+            const label = existingShift === 'first_half'
+            ? 'First Half (20:00-00:00 PKT)'
+              : existingShift === 'second_half'
+            ? 'Second Half (01:00-05:00 PKT)'
+            : 'Full Time (20:00-00:00 & 01:00-05:00 PKT)';
+            return err(`${conflictingAssignment.employee_name} is already assigned to ${conflictingAssignment.client_name} for ${label}.`, 409);
+          }
 
         await sql`DELETE FROM client_assignments WHERE client_id = ${id}`;
 

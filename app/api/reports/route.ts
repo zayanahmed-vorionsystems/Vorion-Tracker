@@ -2,12 +2,15 @@
 import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
-import { canMonitorAll, normalizeRole, type ShiftType } from '@/lib/roles';
-import { LIVE_HEARTBEAT_STALE_SECONDS } from '@/lib/status';
+import { canMonitorAll, normalizeRole } from '@/lib/roles';
+import { LIVE_HEARTBEAT_STALE_SECONDS, normalizePresenceStatus } from '@/lib/status';
 import {
-  getShiftWindowsForUtcRange,
-  getUtcRangeForLocalDate,
-  isScreenshotWithinShiftInPkt,
+  BUSINESS_TIME_ZONE,
+  getBusinessDayRange,
+  getShiftDateInTimeZone,
+  getShiftRangeForDate,
+  getShiftWindowsForDate,
+  isTimestampWithinShiftWindows,
 } from '@/lib/shifts';
 
 function overlapSeconds(startIso: string | null, endIso: string | null, windows: Array<{ start: Date; end: Date }>) {
@@ -27,12 +30,12 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const type   = searchParams.get('type') || 'daily';
-  const date   = searchParams.get('date') || new Date().toISOString().slice(0, 10);
-  const timeZone = searchParams.get('tz') || 'America/New_York';
+  const requestedDate = searchParams.get('date');
   const role = normalizeRole(user.role);
   const isEmployee = role === 'employee';
   const isClient = role === 'client';
   const canViewAll = canMonitorAll(role);
+  const date = requestedDate || getShiftDateInTimeZone(new Date(), BUSINESS_TIME_ZONE);
 
   try {
     if (!isEmployee && !isClient && !canViewAll) {
@@ -42,7 +45,7 @@ export async function GET(req: NextRequest) {
     // ── DAILY DASHBOARD SUMMARY ──────────────────────────────────────────
     if (type === 'daily') {
       if (isClient) {
-        const dayRange = getUtcRangeForLocalDate(date, timeZone);
+        const fullShiftRange = getShiftRangeForDate(date, 'full_time');
         const assignedEmployees = await sql`
           SELECT
             p.id,
@@ -70,9 +73,10 @@ export async function GET(req: NextRequest) {
             total_seconds: 0,
             screenshot_count: 0,
             avg_activity_pct: null,
-            last_active: row.last_activity || null,
-            current_status: row.current_status || 'offline',
-            current_app: row.current_app || null,
+            last_active: null,
+            current_status: 'offline',
+            current_app: null,
+            assignment_shift_type: row.assignment_shift_type || 'full_time',
           };
           rowsByEmployee.set(row.id, existing);
         }
@@ -84,15 +88,15 @@ export async function GET(req: NextRequest) {
                 SELECT employee_id, check_in, check_out
                 FROM attendance
                 WHERE employee_id = ANY(${employeeIds}::uuid[])
-                  AND check_in < ${dayRange.endIso}
-                  AND COALESCE(check_out, NOW()) > ${dayRange.startIso}
+                  AND check_in < ${fullShiftRange.endIso}
+                  AND COALESCE(check_out, NOW()) > ${fullShiftRange.startIso}
               `,
               sql`
                 SELECT employee_id, activity_pct, captured_at
                 FROM screenshots
                 WHERE employee_id = ANY(${employeeIds}::uuid[])
-                  AND captured_at >= ${dayRange.startIso}
-                  AND captured_at < ${dayRange.endIso}
+                  AND captured_at >= ${fullShiftRange.startIso}
+                  AND captured_at < ${fullShiftRange.endIso}
               `,
             ])
           : [[], []];
@@ -112,15 +116,28 @@ export async function GET(req: NextRequest) {
         }
 
         for (const row of assignedEmployees || []) {
-          const shiftWindows = getShiftWindowsForUtcRange(
-            dayRange.start,
-            dayRange.end,
-            row.assignment_shift_type || 'full_time',
+          const shiftWindows = getShiftWindowsForDate(date, row.assignment_shift_type || 'full_time');
+          const lastActivity = row.last_activity ? new Date(row.last_activity) : null;
+          const now = new Date();
+          const lastActivityIsInShift = Boolean(
+            lastActivity && isTimestampWithinShiftWindows(lastActivity, shiftWindows),
+          );
+          const currentlyInShift = isTimestampWithinShiftWindows(now, shiftWindows);
+          const hasFreshHeartbeat = Boolean(
+            lastActivity
+            && now.getTime() - lastActivity.getTime() <= LIVE_HEARTBEAT_STALE_SECONDS * 1000,
           );
           const visibleScreenshots = (screenshotsByEmployee.get(row.id) || []).filter((shot: any) =>
-            isScreenshotWithinShiftInPkt(shot.captured_at, row.assignment_shift_type || 'full_time'),
+            isTimestampWithinShiftWindows(shot.captured_at, shiftWindows),
           );
           const existing = rowsByEmployee.get(row.id);
+          if (lastActivityIsInShift) {
+            existing.last_active = row.last_activity;
+          }
+          if (currentlyInShift && lastActivityIsInShift && hasFreshHeartbeat) {
+            existing.current_status = normalizePresenceStatus(row.current_status);
+            existing.current_app = row.current_app || null;
+          }
           existing.total_seconds += (attendanceByEmployee.get(row.id) || []).reduce(
             (sum: number, attendance: any) => sum + overlapSeconds(attendance.check_in, attendance.check_out, shiftWindows),
             0,
@@ -143,6 +160,7 @@ export async function GET(req: NextRequest) {
         return ok({ date, rows: Array.from(rowsByEmployee.values()) });
       }
 
+      const businessDayRange = getBusinessDayRange(date, BUSINESS_TIME_ZONE);
       const rows = await sql`
         WITH break_summary AS (
           SELECT
@@ -176,7 +194,8 @@ export async function GET(req: NextRequest) {
           FROM attendance a
           LEFT JOIN break_summary   b  ON b.attendance_id = a.id
           LEFT JOIN employee_status es ON es.employee_id  = a.employee_id
-          WHERE DATE(a.check_in) = ${date}
+          WHERE a.check_in < ${businessDayRange.endIso}
+            AND COALESCE(a.check_out, NOW()) > ${businessDayRange.startIso}
           GROUP BY a.employee_id
         ),
         screenshot_summary AS (
@@ -184,7 +203,8 @@ export async function GET(req: NextRequest) {
             employee_id,
             COUNT(*) AS screenshot_count
           FROM screenshots
-          WHERE DATE(captured_at) = ${date}
+          WHERE captured_at >= ${businessDayRange.startIso}
+            AND captured_at < ${businessDayRange.endIso}
           GROUP BY employee_id
         ),
         activity_summary AS (
@@ -193,7 +213,8 @@ export async function GET(req: NextRequest) {
             AVG(activity_pct)                          AS avg_activity_pct,
             COUNT(*)                                   AS activity_record_count
           FROM screenshots
-          WHERE DATE(captured_at) = ${date}
+          WHERE captured_at >= ${businessDayRange.startIso}
+            AND captured_at < ${businessDayRange.endIso}
             AND activity_pct IS NOT NULL
           GROUP BY employee_id
         )

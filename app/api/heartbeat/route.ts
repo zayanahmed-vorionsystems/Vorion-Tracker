@@ -8,8 +8,11 @@ export async function POST(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
 
-  const { currentApp, activityPct, status: currentStatus, timestamp } = await req.json();
-  const now = timestamp ? new Date(timestamp).toISOString() : new Date().toISOString();
+  const { currentApp, activityPct, status: currentStatus } = await req.json();
+  // Presence freshness must use the server clock. Agent clocks can be skewed,
+  // which otherwise makes one dashboard consider a heartbeat stale while
+  // another has just received the corresponding live event.
+  const now = new Date().toISOString();
 
   try {
     const statusValue = normalizePresenceStatus(currentStatus);

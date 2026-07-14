@@ -49,13 +49,15 @@ function bindIpcListeners() {
   if (listenersBound) return;
   listenersBound = true;
 
-  ipcMain.on('livekit:ready', () => {
+  ipcMain.on('livekit:ready', (event) => {
+    if (!captureWindow || event.sender.id !== captureWindow.webContents.id) return;
     captureWindowReady = true;
     resolveCaptureReady?.();
     resolveCaptureReady = null;
   });
 
-  ipcMain.on('livekit:log', (_event, payload) => {
+  ipcMain.on('livekit:log', (event, payload) => {
+    if (!captureWindow || event.sender.id !== captureWindow.webContents.id) return;
     console.log('[AGENT][LIVEKIT]', payload);
   });
 }
@@ -78,6 +80,7 @@ function getOrCreateCaptureWindow() {
       preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
 
@@ -110,6 +113,10 @@ function getOrCreateCaptureWindow() {
       captureHtmlPath,
     });
   });
+  win.webContents.on('will-navigate', (event, targetUrl) => {
+    if (targetUrl !== win.webContents.getURL()) event.preventDefault();
+  });
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   if (!captureHtmlPath) {
     throw new Error('capture.html not found for live publisher window');

@@ -1,6 +1,6 @@
 'use client';
 // app/(dashboard)/screenshots/page.tsx
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/auth';
 import { canCreateScreenshotFlags, canSendFlagReports, normalizeRole } from '@/lib/roles';
 import { useRouter } from 'next/navigation';
@@ -20,6 +20,8 @@ const BRAND = {
   danger: '#FF5C7A',
 };
 
+const SCREENSHOTS_PER_PAGE = 80;
+
 export default function ScreenshotsPage() {
   const { token, user } = useAuthStore();
   const router = useRouter();
@@ -28,6 +30,8 @@ export default function ScreenshotsPage() {
   const [userId,  setUserId]  = useState('');
   const [preview, setPreview] = useState<string|null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string>('');
   const [flagging, setFlagging] = useState<any | null>(null);
   const [flagComment, setFlagComment] = useState('');
@@ -56,39 +60,58 @@ export default function ScreenshotsPage() {
     }
   }, [isClient, users]);
 
-  useEffect(()=>{
-    const loadScreenshots = async () => {
-      setLoading(true);
-      setError('');
-      if (!token) {
-        setError('Not authenticated. Please sign in.');
-        setShots([]);
-        setLoading(false);
+  const loadScreenshots = useCallback(async (before?: string) => {
+    const appending = Boolean(before);
+    if (appending) setLoadingMore(true);
+    else setLoading(true);
+    setError('');
+
+    if (!token) {
+      setError('Not authenticated. Please sign in.');
+      if (!appending) setShots([]);
+      setLoading(false);
+      setLoadingMore(false);
+      return;
+    }
+
+    const p = new URLSearchParams({ limit: String(SCREENSHOTS_PER_PAGE + 1) });
+    if (userId) p.set('userId', userId);
+    if (isClient) p.set('tz', clientTimeZone);
+    if (before) p.set('before', before);
+
+    try {
+      const r = await fetch(`/api/screenshots?${p.toString()}`, { headers: { Authorization: `Bearer ${token}` } });
+      const text = await r.text();
+      if (!r.ok) {
+        console.error('/api/screenshots failed', r.status, text);
+        setError(text || 'Failed to load screenshots');
+        if (!appending) setShots([]);
         return;
       }
-      const p = new URLSearchParams({ limit: '80' });
-      if (userId) p.set('userId', userId);
-      if (isClient) p.set('tz', clientTimeZone);
-      try {
-        const r = await fetch(`/api/screenshots?${p.toString()}`, { headers: { Authorization: `Bearer ${token}` } });
-        const text = await r.text();
-        if (!r.ok) {
-          console.error('/api/screenshots failed', r.status, text);
-          setError(text || 'Failed to load screenshots');
-          setShots([]);
-          return;
-        }
-        setShots(JSON.parse(text || '[]'));
-      } catch (err) {
-        console.error('Failed to load screenshots', err);
-        setError('Failed to load screenshots');
-        setShots([]);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadScreenshots();
+
+      const data = JSON.parse(text || '[]');
+      const page = Array.isArray(data) ? data.slice(0, SCREENSHOTS_PER_PAGE) : [];
+      setHasMore(Array.isArray(data) && data.length > SCREENSHOTS_PER_PAGE);
+      setShots((current) => {
+        if (!appending) return page;
+        const existingIds = new Set(current.map((shot) => shot.id));
+        return [...current, ...page.filter((shot: any) => !existingIds.has(shot.id))];
+      });
+    } catch (err) {
+      console.error('Failed to load screenshots', err);
+      setError('Failed to load screenshots');
+      if (!appending) setShots([]);
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
   }, [clientTimeZone, isClient, token, userId]);
+
+  useEffect(() => {
+    setShots([]);
+    setHasMore(true);
+    void loadScreenshots();
+  }, [loadScreenshots]);
 
   return (
     <div>
@@ -119,7 +142,7 @@ export default function ScreenshotsPage() {
 
       {loading ? (
         <div style={{ textAlign:'center',padding:60,color:BRAND.mutedFaint,fontSize:13 }}>Loading screenshots…</div>
-      ) : error ? (
+      ) : error && shots.length === 0 ? (
         <div style={{
           textAlign: 'center',
           padding: '16px',
@@ -130,6 +153,14 @@ export default function ScreenshotsPage() {
           fontWeight: 600, fontSize: 13,
         }}>{error}</div>
       ) : (
+        <>
+        {error && (
+          <div style={{
+            textAlign: 'center', padding: '12px', marginBottom: 16, borderRadius: 14,
+            background: 'rgba(255,92,122,.1)', border: `1px solid ${BRAND.danger}40`,
+            color: BRAND.danger, fontWeight: 600, fontSize: 13,
+          }}>{error}</div>
+        )}
         <div style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:20 }}>
           {shots.map(s=>(
             <div
@@ -210,6 +241,33 @@ export default function ScreenshotsPage() {
             </div>
           )}
         </div>
+        {hasMore && shots.length > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '28px 0 8px' }}>
+            <button
+              type="button"
+              disabled={loadingMore}
+              onClick={() => {
+                const cursor = shots[shots.length - 1]?.captured_at;
+                if (cursor) void loadScreenshots(cursor);
+              }}
+              style={{
+                minWidth: 190,
+                padding: '12px 20px',
+                borderRadius: 12,
+                border: `1px solid ${BRAND.blue}80`,
+                background: loadingMore ? 'rgba(30,90,224,.12)' : BRAND.blue,
+                color: BRAND.white,
+                cursor: loadingMore ? 'not-allowed' : 'pointer',
+                fontSize: 13,
+                fontWeight: 700,
+                opacity: loadingMore ? 0.7 : 1,
+              }}
+            >
+              {loadingMore ? 'Loading more…' : 'Load more screenshots'}
+            </button>
+          </div>
+        )}
+        </>
       )}
 
       {preview&&(
