@@ -11,6 +11,7 @@
     "pack": "node scripts/clean-release.cjs && npm run generate:embedded-config && npm run generate:app-icon && electron-builder --dir"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.5",
     "axios": "^1.6.8",
     "dotenv": "^17.4.2",
     "electron-store": "^8.1.0",

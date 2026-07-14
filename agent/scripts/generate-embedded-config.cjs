@@ -26,6 +26,9 @@ const embeddedConfig = {
   WORKTRACK_SERVER: mergedEnv.WORKTRACK_SERVER || mergedEnv.NEXT_PUBLIC_APP_URL || '',
   NEXT_PUBLIC_APP_URL: mergedEnv.NEXT_PUBLIC_APP_URL || mergedEnv.WORKTRACK_SERVER || '',
   LIVEKIT_URL: mergedEnv.LIVEKIT_URL || '',
+  SOCKET_SERVER_URL: mergedEnv.SOCKET_SERVER_URL || mergedEnv.NEXT_PUBLIC_SOCKET_SERVER_URL || '',
+  NEXT_PUBLIC_SUPABASE_URL: mergedEnv.NEXT_PUBLIC_SUPABASE_URL || mergedEnv.SUPABASE_URL || '',
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: mergedEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || '',
 };
 
 const fileContents = `export const EMBEDDED_ENV = ${JSON.stringify(embeddedConfig, null, 2)} as const;\n`;

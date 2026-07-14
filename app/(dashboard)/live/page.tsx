@@ -216,6 +216,7 @@ export default function LiveMonitorPage() {
 
     disconnectRoom();
     setSelectedEmployee(employee);
+    setAlertTo(employee.id);
     setIsConnectingStream(true);
     setStreamState('Connecting');
     setStreamError(null);

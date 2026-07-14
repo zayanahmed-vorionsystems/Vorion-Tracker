@@ -11,6 +11,7 @@ import {
 import os from 'os';
 import https from 'https';
 import http from 'http';
+import { createClient } from '@supabase/supabase-js';
 import { EMBEDDED_ENV } from './embedded-config';
 
 function getAncestorEnvCandidates(baseDir: string) {
@@ -170,6 +171,8 @@ const SERVER_URL = (() => {
 
   return normalizedConfiguredUrl;
 })();
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || EMBEDDED_ENV.NEXT_PUBLIC_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || EMBEDDED_ENV.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
 // ─── Persistent store ──────────────────────────────────────────────────────
 const DATA_DIR   = app.getPath('userData');
@@ -274,6 +277,13 @@ let cachedPolicy:         any   = null;
 let cachedBlockedApps:    any[] = [];
 let cachedBlockedWebsites:any[] = [];
 let policySyncInFlight = false;
+let policyRealtimeClient: ReturnType<typeof createClient> | null = null;
+let policyRealtimeChannel: any = null;
+let lastPolicyPushAt = 0;
+type PendingScreenshot = { pngBuf: Buffer; activeApp: string; activityPct: number; capturedAt: string; sessionId: string | null };
+let screenshotQueue: PendingScreenshot[] = [];
+let screenshotFlushTimer: NodeJS.Timeout | null = null;
+let screenshotFlushInFlight = false;
 // tracks which blocked domains we've already reported recently, to avoid spamming events
 const recentlyReportedDomains = new Map<string, number>();
 // tracks recently handled blocked processes, so repeated scans don't reopen the same warning dialog
@@ -540,15 +550,10 @@ async function syncPolicies() {
   if (policySyncInFlight) return;
   policySyncInFlight = true;
   try {
-    const [policyResponse, blockedAppsResponse, blockedWebsitesResponse] = await Promise.all([
-      apiRequest('GET', '/api/security/policies'),
-      apiRequest('GET', '/api/blocked/apps'),
-      apiRequest('GET', '/api/blocked/websites'),
-    ]);
-
-    const nextPolicy          = policyResponse ?? null;
-    const nextBlockedApps     = Array.isArray(blockedAppsResponse)     ? blockedAppsResponse     : [];
-    const nextBlockedWebsites = Array.isArray(blockedWebsitesResponse) ? blockedWebsitesResponse : [];
+    const bundle = await apiRequest('GET', '/api/agent/policy-bundle');
+    const nextPolicy          = bundle?.policy ?? null;
+    const nextBlockedApps     = Array.isArray(bundle?.blockedApps) ? bundle.blockedApps : [];
+    const nextBlockedWebsites = Array.isArray(bundle?.blockedWebsites) ? bundle.blockedWebsites : [];
 
     const changed =
       JSON.stringify(cachedPolicy)          !== JSON.stringify(nextPolicy) ||
@@ -575,9 +580,34 @@ async function syncPolicies() {
 }
 
 async function enforcePolicies() {
-  if (!token) return;
-  try { await syncPolicies(); }
-  catch (err:any) { console.error('[SECURITY] enforcePolicies error:', err?.message || err); }
+  // Scanners enforce cached policy locally. Refresh is startup, a socket push,
+  // or the five-minute safety interval below--never the five-second scan loop.
+}
+
+function connectPolicyRealtime() {
+  if (policyRealtimeChannel || !SUPABASE_URL || !SUPABASE_ANON_KEY) return;
+  policyRealtimeClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+  policyRealtimeChannel = policyRealtimeClient
+    .channel('agent-policy-refresh', { config: { broadcast: { self: false } } })
+    .on('broadcast', { event: 'policy-updated' }, () => {
+      // Public broadcast carries no policy data. Debouncing prevents a noisy
+      // channel from becoming a request amplifier; the bundle remains auth-only.
+      if (Date.now() - lastPolicyPushAt < 5_000) return;
+      lastPolicyPushAt = Date.now();
+      console.log('[SECURITY] Supabase policy change received; refreshing');
+      void syncPolicies();
+    })
+    .subscribe((status: string) => {
+      if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+        console.warn('[SECURITY] Supabase Realtime unavailable; five-minute refresh remains active:', status);
+      }
+    });
+}
+
+function disconnectPolicyRealtime() {
+  if (policyRealtimeClient && policyRealtimeChannel) void policyRealtimeClient.removeChannel(policyRealtimeChannel);
+  policyRealtimeChannel = null;
+  policyRealtimeClient = null;
 }
 
 // ─── Security event reporting ───────────────────────────────────────────────
@@ -761,7 +791,9 @@ if (!isDev && configuredServerUrl && isLocalServerUrl(configuredServerUrl)) {
 }
 
 function broadcastStatus(extra: Record<string, any> = {}) {
-  const payload = { agentId, employeeId, userName, status, sessionId, activeApp: lastActiveApp, activityPct: lastActivityPct, heartbeat: new Date().toISOString(), capturedAt: new Date().toISOString(), ...extra };
+  // This is a local renderer update, not proof that the API accepted a
+  // heartbeat. Only send `heartbeat` after /api/heartbeat succeeds.
+  const payload = { agentId, employeeId, userName, status, sessionId, activeApp: lastActiveApp, activityPct: lastActivityPct, capturedAt: new Date().toISOString(), ...extra };
   mainWindow?.webContents.send('status-changed', payload);
 }
 
@@ -769,6 +801,8 @@ async function sendHeartbeat() {
   if (!token) return;
   try {
     await apiRequest('POST', '/api/heartbeat', { currentApp: lastActiveApp, activityPct: lastActivityPct, status, timestamp: new Date().toISOString() });
+    const heartbeat = new Date().toISOString();
+    mainWindow?.webContents.send('status-changed', { status, userName, employeeId, heartbeat });
     void ensureLiveWatchRunning();
   } catch (err:any) { console.error('Heartbeat failed:', err?.message || err); }
 }
@@ -806,7 +840,8 @@ async function captureAndUpload() {
     lastActivityPct = actPct;
     mainWindow?.webContents.send('screenshot-taken', { time:new Date().toLocaleTimeString(), app:activeApp, pct:actPct });
     broadcastStatus({ screenshotBase64, activeApp, activityPct: actPct, capturedAt });
-    await uploadScreenshot(pngBuf, activeApp, actPct, capturedAt);
+    screenshotQueue.push({ pngBuf, activeApp, activityPct: actPct, capturedAt, sessionId: sessionId || null });
+    scheduleScreenshotFlush();
   } catch(e) { console.error('Capture error:',e); }
 }
 
@@ -825,11 +860,12 @@ async function startTracking() {
   heartbeatInterval = setInterval(() => sendHeartbeat(), 30000);
   policyInterval    = setInterval(() => { void enforcePolicies(); }, 5000);
   scanInterval      = setInterval(() => { void scanBlockedApps(); void scanBlockedWebsites(); }, 2000);
-  policySyncInterval = setInterval(() => { void syncPolicies(); }, 30000);
+  policySyncInterval = setInterval(() => { void syncPolicies(); }, 5 * 60 * 1000);
 
   void captureAndUpload();
   void sendHeartbeat();
   void syncPolicies();
+  connectPolicyRealtime();
   void scanBlockedApps();
   void scanBlockedWebsites();
 
@@ -852,6 +888,10 @@ async function stopTracking() {
   policyInterval = clearTimer(policyInterval);
   scanInterval = clearTimer(scanInterval);
   policySyncInterval = clearTimer(policySyncInterval);
+  if (screenshotFlushTimer) clearTimeout(screenshotFlushTimer);
+  screenshotFlushTimer = null;
+  disconnectPolicyRealtime();
+  void flushScreenshotQueue();
 
   updateTray();
 
@@ -876,6 +916,44 @@ async function watchIdle() {
     status = 'active';
     broadcastStatus();
     void sendHeartbeat();
+  }
+}
+
+function scheduleScreenshotFlush() {
+  if (screenshotFlushTimer || screenshotQueue.length >= 10) {
+    if (screenshotQueue.length >= 10) void flushScreenshotQueue();
+    return;
+  }
+  screenshotFlushTimer = setTimeout(() => {
+    screenshotFlushTimer = null;
+    void flushScreenshotQueue();
+  }, 60_000);
+}
+
+async function flushScreenshotQueue() {
+  if (screenshotFlushInFlight || !screenshotQueue.length || !token) return;
+  screenshotFlushInFlight = true;
+  const batch = screenshotQueue.splice(0, 10);
+  try {
+    const prepared = await apiRequest('POST', '/api/agent/screenshots/upload-urls', { count: batch.length });
+    const uploads = Array.isArray(prepared?.uploads) ? prepared.uploads : [];
+    if (uploads.length !== batch.length) throw new Error('Upload URL count did not match screenshot batch');
+    await Promise.all(batch.map(async (shot, index) => {
+      const response = await fetch(String(uploads[index].signedUrl), {
+        method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: new Uint8Array(shot.pngBuf),
+      });
+      if (!response.ok) throw new Error(`Direct screenshot upload failed (${response.status})`);
+    }));
+    await apiRequest('POST', '/api/agent/screenshots/commit', {
+      screenshots: batch.map((shot, index) => ({ path: uploads[index].path, activeApp: shot.activeApp, activityPct: shot.activityPct, capturedAt: shot.capturedAt, sessionId: shot.sessionId })),
+    });
+  } catch (error: any) {
+    // Existing endpoint is retained as an outage/upgrade fallback; no capture is lost.
+    console.warn('[SCREENSHOTS] Direct batch failed; using legacy upload:', error?.message || error);
+    await Promise.all(batch.map((shot) => uploadScreenshot(shot.pngBuf, shot.activeApp, shot.activityPct, shot.capturedAt)));
+  } finally {
+    screenshotFlushInFlight = false;
+    if (screenshotQueue.length) scheduleScreenshotFlush();
   }
 }
 

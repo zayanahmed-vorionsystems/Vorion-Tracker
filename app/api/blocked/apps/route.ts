@@ -3,6 +3,7 @@ import { requireAuth, ok, err } from '@/lib/api';
 import { createBlockedApp, deleteBlockedApp, listBlockedApps, listEffectiveBlockedApps, updateBlockedApp } from '@/lib/security';
 import { canManageSecurity, normalizeRole } from '@/lib/roles';
 import { sql } from '@/lib/db';
+import { notifyPolicyChanged } from '@/lib/policy-notify';
 
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
@@ -40,6 +41,7 @@ export async function POST(req: NextRequest) {
       departmentId: body?.departmentId || null,
       employeeEmail: body?.employeeEmail || null,
     });
+    await notifyPolicyChanged();
     return ok(app, 201);
   } catch (e: any) {
     console.error('POST /api/blocked/apps error:', e?.message || e);
@@ -65,6 +67,7 @@ export async function PUT(req: NextRequest) {
       employeeEmail: body?.employeeEmail !== undefined ? body.employeeEmail || null : undefined,
     });
     if (!app) return err('App not found', 404);
+    await notifyPolicyChanged();
     return ok(app);
   } catch (e: any) {
     console.error('PUT /api/blocked/apps error:', e?.message || e);
@@ -84,6 +87,7 @@ export async function DELETE(req: NextRequest) {
     if (!id) return err('id is required', 400);
     const deleted = await deleteBlockedApp(id);
     if (!deleted) return err('App not found', 404);
+    await notifyPolicyChanged();
     return ok({ success: true });
   } catch (e: any) {
     console.error('DELETE /api/blocked/apps error:', e?.message || e);

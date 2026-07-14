@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { requireAuth, ok, err } from '@/lib/api';
 import { deletePolicyScopeSettings, getPolicySettings, listDepartments, listPolicyEmployees, listPolicyScopeSettings, savePolicyScopeSettings, updatePolicySettings } from '@/lib/security';
 import { canManageSecurity, normalizeRole } from '@/lib/roles';
+import { notifyPolicyChanged } from '@/lib/policy-notify';
 
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
@@ -42,6 +43,7 @@ export async function PUT(req: NextRequest) {
       showWarning: body?.showWarning !== undefined ? Boolean(body.showWarning) : undefined,
       killProcess: body?.killProcess !== undefined ? Boolean(body.killProcess) : undefined,
     });
+    await notifyPolicyChanged();
     return ok(policy);
   } catch (e: any) {
     console.error('PUT /api/policies error:', e?.message || e);
@@ -66,6 +68,7 @@ export async function POST(req: NextRequest) {
       showWarning: body?.showWarning === undefined ? null : Boolean(body.showWarning),
       killProcess: body?.killProcess === undefined ? null : Boolean(body.killProcess),
     });
+    await notifyPolicyChanged();
     return ok(policy, body?.id ? 200 : 201);
   } catch (e: any) {
     console.error('POST /api/policies error:', e?.message || e);
@@ -84,6 +87,7 @@ export async function DELETE(req: NextRequest) {
     if (!id) return err('id is required', 400);
     const deleted = await deletePolicyScopeSettings(id);
     if (!deleted) return err('Policy override not found', 404);
+    await notifyPolicyChanged();
     return ok({ success: true });
   } catch (e: any) {
     console.error('DELETE /api/policies error:', e?.message || e);

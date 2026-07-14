@@ -61,7 +61,9 @@ function startPacServer(pacContent: string): Promise<boolean> {
     if (pacServer) { resolve(true); return; }
 
     const nextServer = http.createServer((req, res) => {
-      if (req.url !== '/proxy.pac') {
+      // The policy revision is part of the URL to force Chromium to reload a
+      // changed PAC file instead of continuing to use its cached script.
+      if (!req.url || new URL(req.url, 'http://127.0.0.1').pathname !== '/proxy.pac') {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         res.end('Not found');
         return;
@@ -96,11 +98,14 @@ function stopPacServer() {
 }
 
 // ─── Registry (HKCU — no admin needed) ───────────────────────────────────────
-function applyProxyRegistry(enable: boolean): Promise<void> {
+function applyProxyRegistry(enable: boolean, policyKey = ''): Promise<void> {
   return new Promise((resolve) => {
     if (process.platform !== 'win32') return resolve();
     if (enable && !pacPort) return resolve();
-    const pacUrl = `http://127.0.0.1:${pacPort}/proxy.pac`;
+    const revision = policyKey
+      ? crypto.createHash('sha256').update(policyKey).digest('hex').slice(0, 16)
+      : '';
+    const pacUrl = `http://127.0.0.1:${pacPort}/proxy.pac${revision ? `?v=${revision}` : ''}`;
 
     const lines = enable
       ? [
@@ -185,7 +190,7 @@ export async function syncProxyBlock(cachedPolicy: any, cachedBlockedWebsites: a
     console.error('[SECURITY] Website block was not applied because the PAC server could not start');
     return;
   }
-  await applyProxyRegistry(true);
+  await applyProxyRegistry(true, domainsKey);
   // Only mark success after both the PAC server and registry update have run,
   // so a later policy sync retries a transient setup failure.
   lastProxyDomainsKey = domainsKey;

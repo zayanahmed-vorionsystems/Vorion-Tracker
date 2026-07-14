@@ -65,13 +65,18 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
 
   const {
-    employee_id,
+    employee_id: requestedEmployeeId,
     alert_type,
     title,
     description,
     severity = 'medium',
     metadata = {},
   } = body;
+
+  // Alerts are always one-to-one. Normalize the requested recipient once and
+  // use that value for both persistence and real-time delivery so an empty or
+  // malformed recipient can never fall through to a broadcast.
+  const employee_id = typeof requestedEmployeeId === 'string' ? requestedEmployeeId.trim() : '';
 
   const missing = {
     employee_id: employee_id ?? null,
@@ -89,6 +94,16 @@ export async function POST(req: NextRequest) {
 
   if (Object.keys(invalidFields).length) {
     return NextResponse.json({ message: 'Validation failed', missing }, { status: 400 });
+  }
+
+  const recipients = await sql`
+    SELECT id
+    FROM profiles
+    WHERE id = ${employee_id} AND role = 'employee'
+    LIMIT 1
+  `;
+  if (!recipients.length) {
+    return NextResponse.json({ error: 'Selected employee was not found' }, { status: 404 });
   }
 
   const columns = await getAlertColumns();

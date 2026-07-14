@@ -64,6 +64,34 @@ export async function POST(req: NextRequest) {
       RETURNING id
     `;
 
+    // A successfully uploaded screenshot is an active signal from the desktop
+    // agent. Keep presence in sync with it so a missed heartbeat cannot make
+    // an actively tracking employee appear offline on the dashboard or Live
+    // Monitor.
+    const presenceTimestamp = new Date().toISOString();
+    await sql`
+      INSERT INTO employee_status(employee_id, current_status, current_app, last_activity, updated_at)
+      VALUES(${user.sub}, 'working', ${activeApp}, ${presenceTimestamp}, NOW())
+      ON CONFLICT (employee_id) DO UPDATE
+      SET current_status = 'working',
+          current_app = ${activeApp},
+          last_activity = ${presenceTimestamp},
+          updated_at = NOW()
+    `;
+
+    const presencePayload = {
+      employeeId: user.sub,
+      employeeName: user.name,
+      status: 'working',
+      currentApp: activeApp,
+      activityPct: actPct,
+      lastActivity: presenceTimestamp,
+      timestamp: presenceTimestamp,
+    };
+
+    await emitSocketEvent('employee-status', presencePayload, { toAdmins: true });
+    await emitSocketEvent('employee-activity-updated', presencePayload, { toAdmins: true });
+
     await emitSocketEvent('new-screenshot', {
       userId:       user.sub,
       userName:     user.name,

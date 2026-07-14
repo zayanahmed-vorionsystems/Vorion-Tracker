@@ -6,7 +6,9 @@ const http = require('http');
 const jwt = require('jsonwebtoken');
 const { Server } = require('socket.io');
 
-const PORT = process.env.SOCKET_SERVER_PORT || 4000;
+// Managed hosts (Railway, Render, Fly, etc.) provide PORT. Keep the explicit
+// local override for development while making the public relay deployable.
+const PORT = process.env.PORT || process.env.SOCKET_SERVER_PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET;
 const SOCKET_SERVER_SECRET = process.env.SOCKET_SERVER_SECRET || JWT_SECRET || '';
 const allowedOrigins = (process.env.SOCKET_CLIENT_ORIGIN || '')
@@ -27,6 +29,7 @@ const allowedServerEvents = new Set([
   'new-screenshot',
   'screenshot-deleted',
   'security-event',
+  'policy-updated',
 ]);
 
 function normalizeRole(role) {
@@ -110,13 +113,20 @@ const server = http.createServer((req, res) => {
       try {
         const { event, payload, toEmployeeId, toAdmins } = JSON.parse(body || '{}');
         if (event && allowedServerEvents.has(event)) {
-          if (toEmployeeId) {
-            io.to(`employee:${toEmployeeId}`).emit(event, payload);
+          const targetEmployeeId = cleanIdentifier(toEmployeeId);
+          // Alerts must never use the generic broadcast path. A missing
+          // recipient is a delivery error, not an instruction to notify every
+          // connected client.
+          if (event === 'new-alert' && !targetEmployeeId) {
+            throw new Error('new-alert requires a target employee');
+          }
+          if (targetEmployeeId) {
+            io.to(`employee:${targetEmployeeId}`).emit(event, payload);
           }
           if (toAdmins) {
             io.to('admins').emit(event, payload);
           }
-          if (!toEmployeeId && !toAdmins) {
+          if (!targetEmployeeId && !toAdmins) {
             io.emit(event, payload);
           }
         }
@@ -215,10 +225,8 @@ io.on('connection', (socket) => {
   socket.on('new-alert', (payload) => {
     if (!requireAdminSocket(socket)) return;
     const targetEmployeeId = cleanIdentifier(payload?.employee_id || payload?.employeeId);
-    if (targetEmployeeId) {
-      io.to(`employee:${targetEmployeeId}`).emit('new-alert', payload);
-    }
-    io.to('admins').emit('new-alert', payload);
+    if (!targetEmployeeId) return;
+    io.to(`employee:${targetEmployeeId}`).emit('new-alert', payload);
   });
 
   socket.on('security-event', (payload) => {
