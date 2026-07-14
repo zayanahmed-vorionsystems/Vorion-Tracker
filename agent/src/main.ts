@@ -608,6 +608,25 @@ function normalizeProcessName(name:string) {
   return (name || '').trim().toLowerCase().replace(/\.exe$/i, '');
 }
 
+async function getRunningProcessNames(): Promise<string[]> {
+  const { execFile } = await import('child_process');
+
+  // WMIC was removed from recent Windows 11 installations. A failed WMIC
+  // invocation used to make every enforcement scan fail. tasklist is included
+  // with supported Windows versions and its CSV output is locale-independent.
+  const output = await new Promise<string>((resolve, reject) => {
+    execFile('tasklist', ['/FO', 'CSV', '/NH'], { maxBuffer: 1024 * 1024 * 10 },
+      (error, stdout) => error ? reject(error) : resolve(stdout));
+  });
+
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => /^\s*"([^"]+)"/.exec(line)?.[1] || '')
+    .filter(Boolean);
+}
+
 // ─── Website scan (detection + reporting only — PAC proxy does the actual blocking) ──
 async function scanBlockedWebsites() {
   if (!token || !cachedPolicy || !cachedPolicy.blockWebsites || !cachedBlockedWebsites.length) return;
@@ -654,16 +673,10 @@ async function scanBlockedWebsites() {
 
 // ─── App scan ───────────────────────────────────────────────────────────────
 async function scanBlockedApps() {
-  if (!token || !cachedPolicy || !cachedBlockedApps.length) return;
+  if (!token || !cachedPolicy || !cachedPolicy.blockApps || !cachedBlockedApps.length) return;
   try {
     const { execFile } = await import('child_process');
-    const output = await new Promise<string>((resolve, reject) => {
-      execFile('wmic', ['process', 'get', 'Name', '/FORMAT:CSV'], { maxBuffer: 1024 * 1024 * 10 },
-        (error, stdout) => error ? reject(error) : resolve(stdout));
-    });
-    const runningProcesses = output.split(/\r?\n/).map((l:string) => l.trim()).filter(Boolean)
-      .map((l:string) => { const parts = l.split(','); return parts[parts.length - 1]?.trim() || ''; })
-      .filter((n:string) => n && n !== 'Name');
+    const runningProcesses = await getRunningProcessNames();
 
     const blockedNames = cachedBlockedApps
       .filter((item: any) => item?.enabled)

@@ -17,6 +17,16 @@ let currentPacContent  = '';
 let proxyAppliedOnce   = false; // track if we've already killed Chrome once this session
 let pacPort = 0;
 
+function normalizeDomain(value: unknown): string {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z]+:\/\//, '')
+    .replace(/^www\./, '')
+    .split(/[/?#:]/, 1)[0]
+    .replace(/^\.+|\.+$/g, '');
+}
+
 // ─── PAC content ─────────────────────────────────────────────────────────────
 function buildPacContent(domains: string[]): string {
   const domainList = JSON.stringify(domains);
@@ -158,16 +168,16 @@ export async function syncProxyBlock(cachedPolicy: any, cachedBlockedWebsites: a
 
   const domains = cachedBlockedWebsites
     .filter((item: any) => item?.enabled)
-    .map((item: any) => (item.domain || '').toLowerCase().replace(/^www\./, ''))
+    .map((item: any) => normalizeDomain(item.domain))
     .filter(Boolean);
 
-  const domainsKey = JSON.stringify(domains.slice().sort());
+  const uniqueDomains = [...new Set(domains)];
+  const domainsKey = JSON.stringify(uniqueDomains.slice().sort());
   if (domainsKey === lastProxyDomainsKey) return; // nothing changed
-  lastProxyDomainsKey = domainsKey;
 
-  if (!domains.length) { await removeProxyBlock(); return; }
+  if (!uniqueDomains.length) { await removeProxyBlock(); return; }
 
-  const pacContent = buildPacContent(domains);
+  const pacContent = buildPacContent(uniqueDomains);
   try { fs.mkdirSync(PAC_DIR, { recursive: true }); fs.writeFileSync(PAC_PATH, pacContent, 'utf8'); } catch {}
 
   const serverStarted = await startPacServer(pacContent);
@@ -176,6 +186,9 @@ export async function syncProxyBlock(cachedPolicy: any, cachedBlockedWebsites: a
     return;
   }
   await applyProxyRegistry(true);
+  // Only mark success after both the PAC server and registry update have run,
+  // so a later policy sync retries a transient setup failure.
+  lastProxyDomainsKey = domainsKey;
   await killChromeOnce(); // <- one-time restart so Chrome picks up PAC
   console.log('[SECURITY] Website block active — domains:', domains.join(', '));
 }

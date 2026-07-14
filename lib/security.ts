@@ -75,6 +75,12 @@ export interface SecurityEventRecord {
   employeeName?: string | null;
 }
 
+// Schema setup is intentionally lazy to support existing deployments, but it
+// must never run for every request. The old behaviour issued dozens of DDL
+// statements for each policy/department read (and four copies concurrently on
+// the policy dashboard), which caused lock waits and very slow saves.
+let securitySchemaReady: Promise<void> | null = null;
+
 function normalizeScopeType(value: unknown): PolicyScopeType {
   const next = String(value || '').trim().toLowerCase();
   if (next === 'department' || next === 'employee') return next;
@@ -166,7 +172,7 @@ async function assertEmployeeBelongsToDepartment(employeeEmail: string, departme
   }
 }
 
-export async function ensureSecuritySchema(): Promise<void> {
+async function initializeSecuritySchema(): Promise<void> {
   await sql`CREATE EXTENSION IF NOT EXISTS pgcrypto`;
 
   await sql`
@@ -237,6 +243,18 @@ export async function ensureSecuritySchema(): Promise<void> {
     SELECT 1, true, true, true, true, NOW()
     WHERE NOT EXISTS (SELECT 1 FROM policy_settings WHERE id = 1)
   `;
+}
+
+export function ensureSecuritySchema(): Promise<void> {
+  if (!securitySchemaReady) {
+    securitySchemaReady = initializeSecuritySchema().catch((error) => {
+      // Do not permanently cache a failed initialization. A transient database
+      // failure should be retried by the next request.
+      securitySchemaReady = null;
+      throw error;
+    });
+  }
+  return securitySchemaReady;
 }
 
 export async function listDepartments(): Promise<DepartmentRecord[]> {
