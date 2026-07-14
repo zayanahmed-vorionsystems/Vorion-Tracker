@@ -192,6 +192,12 @@ export async function sendVerificationEmail(opts: {
   console.log('[mailer] verification email accepted', { to, messageId: info?.messageId });
 }
 
+/**
+ * Screenshot flag report email — sent via the same Gmail/SMTP transporter
+ * as every other email in this file (invite, verification, credentials).
+ * Uses GMAIL_USER / GMAIL_APP_PASSWORD (or SMTP_* equivalents) from the
+ * environment.
+ */
 export async function sendScreenshotFlagReportEmail(opts: {
   to: string[];
   cc?: string[];
