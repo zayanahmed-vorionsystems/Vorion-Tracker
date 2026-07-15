@@ -32,18 +32,22 @@ export async function POST(req: NextRequest) {
         rows.push({ ...shot, id: result.rows[0].id, fileUrl });
       }
       const latest = rows[rows.length - 1];
-      await client.query(
-        "INSERT INTO employee_status(employee_id, current_status, current_app, last_activity, updated_at) VALUES($1, 'working', $2, NOW(), NOW()) ON CONFLICT (employee_id) DO UPDATE SET current_status = 'working', current_app = $2, last_activity = NOW(), updated_at = NOW()",
+      // Screenshots prove that the agent is connected, but they do not prove
+      // keyboard or mouse activity. In particular, the agent keeps capturing
+      // while a person is idle. Preserve the status last reported by its
+      // heartbeat instead of turning every capture into "working".
+      const presenceResult = await client.query(
+        "INSERT INTO employee_status(employee_id, current_status, current_app, last_activity, updated_at) VALUES($1, 'working', $2, NOW(), NOW()) ON CONFLICT (employee_id) DO UPDATE SET current_app = $2, last_activity = NOW(), updated_at = NOW() RETURNING current_status",
         [user.sub, latest.activeApp],
       );
-      return rows;
+      return { rows, status: presenceResult.rows[0]?.current_status || 'working' };
     });
-    const latest = saved[saved.length - 1];
-    const presence = { employeeId: user.sub, employeeName: user.name, status: 'working', currentApp: latest.activeApp, activityPct: latest.activityPct, lastActivity: new Date().toISOString(), timestamp: new Date().toISOString() };
+    const latest = saved.rows[saved.rows.length - 1];
+    const presence = { employeeId: user.sub, employeeName: user.name, status: saved.status, currentApp: latest.activeApp, activityPct: latest.activityPct, lastActivity: new Date().toISOString(), timestamp: new Date().toISOString() };
     await emitSocketEvent('employee-status', presence, { toAdmins: true });
     await emitSocketEvent('employee-activity-updated', presence, { toAdmins: true });
-    await Promise.all(saved.map((shot) => emitSocketEvent('new-screenshot', { userId: user.sub, userName: user.name, screenshotId: shot.id, fileUrl: shot.fileUrl, activeApp: shot.activeApp, activityPct: shot.activityPct, capturedAt: shot.capturedAt }, { toAdmins: true })));
-    return ok({ screenshots: saved.map((shot) => ({ id: shot.id, path: shot.path })) }, 201);
+    await Promise.all(saved.rows.map((shot) => emitSocketEvent('new-screenshot', { userId: user.sub, userName: user.name, screenshotId: shot.id, fileUrl: shot.fileUrl, activeApp: shot.activeApp, activityPct: shot.activityPct, capturedAt: shot.capturedAt }, { toAdmins: true })));
+    return ok({ screenshots: saved.rows.map((shot) => ({ id: shot.id, path: shot.path })) }, 201);
   } catch (error: any) {
     console.error('POST /api/agent/screenshots/commit error:', error?.message || error);
     return err('Failed to save screenshots', 500);

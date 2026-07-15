@@ -64,25 +64,25 @@ export async function POST(req: NextRequest) {
       RETURNING id
     `;
 
-    // A successfully uploaded screenshot is an active signal from the desktop
-    // agent. Keep presence in sync with it so a missed heartbeat cannot make
-    // an actively tracking employee appear offline on the dashboard or Live
-    // Monitor.
+    // A screenshot proves the agent is connected, not that keyboard or mouse
+    // input occurred. Preserve an idle/break status reported by the agent;
+    // otherwise periodic captures make an idle employee briefly look working.
     const presenceTimestamp = new Date().toISOString();
-    await sql`
+    const [presenceRow] = await sql`
       INSERT INTO employee_status(employee_id, current_status, current_app, last_activity, updated_at)
       VALUES(${user.sub}, 'working', ${activeApp}, ${presenceTimestamp}, NOW())
       ON CONFLICT (employee_id) DO UPDATE
-      SET current_status = 'working',
-          current_app = ${activeApp},
+      SET current_app = ${activeApp},
           last_activity = ${presenceTimestamp},
           updated_at = NOW()
+      RETURNING current_status
     `;
+    const presenceStatus = presenceRow?.current_status || 'working';
 
     const presencePayload = {
       employeeId: user.sub,
       employeeName: user.name,
-      status: 'working',
+      status: presenceStatus,
       currentApp: activeApp,
       activityPct: actPct,
       lastActivity: presenceTimestamp,

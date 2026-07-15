@@ -131,27 +131,65 @@ export async function POST(req: NextRequest) {
 
     if (sendReport) {
       if (!hasSmtpConfig()) {
-        emailWarning = 'SMTP is not configured, so the flag was saved without sending the email report.';
+        emailWarning = 'SMTP is not configured (GMAIL_USER/GMAIL_APP_PASSWORD missing), so the flag was saved without sending the email report.';
       } else {
         try {
           const subject = `Vorion Screenshot Flag Report - ${screenshot.employee_name}`;
+          const capturedStr = new Date(screenshot.captured_at).toLocaleString();
+
+          // Branded row helper so every field (employee, flagged by, captured,
+          // comment, screenshot, PDF) renders consistently.
+          const row = (label: string, valueHtml: string) => `
+            <tr>
+              <td style="padding:10px 0;border-bottom:1px solid #E4E7EC;width:140px;vertical-align:top">
+                <span style="font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#6B7280">${label}</span>
+              </td>
+              <td style="padding:10px 0;border-bottom:1px solid #E4E7EC;vertical-align:top">
+                <span style="font-size:14px;color:#0A0E1A">${valueHtml}</span>
+              </td>
+            </tr>`;
+
+          const pdfRowHtml = pdfUrl
+            ? row('PDF Report', `<a href="${pdfUrl}" style="color:#1E5AE0;text-decoration:none;font-weight:600">${pdfName}</a> (also attached to this email)`)
+            : pdfName
+              ? row('PDF Report', `${pdfName} (attached to this email)`)
+              : '';
+
           const html = `
-            <div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto">
-              <h2>Screenshot Flag Report</h2>
-              <p><strong>Employee:</strong> ${screenshot.employee_name}</p>
-              <p><strong>Captured:</strong> ${new Date(screenshot.captured_at).toLocaleString()}</p>
-              <p><strong>Flagged by:</strong> ${user.name}</p>
-              <p><strong>Comment:</strong></p>
-              <p>${comment.replace(/\n/g, '<br />')}</p>
-              <p><a href="${screenshot.file_url}">Open screenshot</a></p>
+            <div style="background:#F5F7FA;padding:32px 16px;font-family:Arial,Helvetica,sans-serif">
+              <div style="max-width:640px;margin:0 auto;background:#FFFFFF;border-radius:16px;overflow:hidden;border:1px solid #E4E7EC">
+                <div style="background:#0A0E1A;padding:20px 28px">
+                  <span style="color:#F5F7FA;font-size:18px;font-weight:800;letter-spacing:.02em">Vorion &middot; Screenshot Flag Report</span>
+                </div>
+                <div style="padding:28px">
+                  <table style="width:100%;border-collapse:collapse">
+                    ${row('Employee', screenshot.employee_name)}
+                    ${row('Flagged By', user.name)}
+                    ${row('Captured', capturedStr)}
+                    ${pdfRowHtml}
+                  </table>
+                  <div style="margin-top:18px">
+                    <span style="font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#6B7280">Comment</span>
+                    <p style="font-size:14px;color:#0A0E1A;line-height:1.6;margin:8px 0 0;white-space:pre-wrap">${comment.replace(/\n/g, '<br />')}</p>
+                  </div>
+                  <div style="margin-top:24px">
+                    <a href="${screenshot.file_url}" style="display:inline-block;background:#1E5AE0;color:#F5F7FA;text-decoration:none;font-size:13px;font-weight:700;padding:10px 18px;border-radius:8px">Open Screenshot</a>
+                  </div>
+                </div>
+                <div style="padding:16px 28px;background:#F5F7FA;border-top:1px solid #E4E7EC">
+                  <span style="font-size:11px;color:#98A2B3">This is an automated report from Vorion. Please do not reply to this email.</span>
+                </div>
+              </div>
             </div>
           `;
+
           const text =
             `Screenshot Flag Report\n\n` +
             `Employee: ${screenshot.employee_name}\n` +
-            `Captured: ${new Date(screenshot.captured_at).toLocaleString()}\n` +
-            `Flagged by: ${user.name}\n\n` +
-            `Comment:\n${comment}\n\n` +
+            `Flagged by: ${user.name}\n` +
+            `Captured: ${capturedStr}\n` +
+            (pdfUrl ? `PDF Report: ${pdfUrl}\n` : pdfName ? `PDF Report: ${pdfName} (attached)\n` : '') +
+            `\nComment:\n${comment}\n\n` +
             `Screenshot: ${screenshot.file_url}`;
 
           await sendScreenshotFlagReportEmail({
