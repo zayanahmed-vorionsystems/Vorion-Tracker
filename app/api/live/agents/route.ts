@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
     latest_screenshots AS (
       SELECT DISTINCT ON (s.employee_id)
         s.employee_id,
-        s.file_url,
+        s.blob_url,
         s.captured_at
       FROM screenshots s
       ORDER BY s.employee_id, s.captured_at DESC
@@ -37,7 +37,7 @@ export async function GET(req: NextRequest) {
       es.current_status,
       es.current_app,
       es.last_activity,
-      ls.file_url AS last_screenshot_url,
+      ls.blob_url AS last_screenshot_url,
       ls.captured_at AS last_screenshot_at
     FROM public.profiles p
     LEFT JOIN active_attendance aa ON aa.employee_id = p.id
