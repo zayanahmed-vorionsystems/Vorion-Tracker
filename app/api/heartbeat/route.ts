@@ -8,7 +8,13 @@ export async function POST(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
 
-  const { currentApp, activityPct, status: currentStatus } = await req.json();
+  let body: any = {};
+  try {
+    body = await req.json();
+  } catch {
+    return err('Invalid or empty JSON body', 400);
+  }
+  const { currentApp, activityPct, status: currentStatus } = body;
   // Presence freshness must use the server clock. Agent clocks can be skewed,
   // which otherwise makes one dashboard consider a heartbeat stale while
   // another has just received the corresponding live event.

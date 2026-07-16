@@ -10,6 +10,7 @@ import {
 import os from 'os';
 import https from 'https';
 import http from 'http';
+import sharp from 'sharp';
 import { createClient } from '@supabase/supabase-js';
 import { EMBEDDED_ENV } from './embedded-config';
 
@@ -282,7 +283,18 @@ let policyRealtimeChannel: any = null;
 let lastPolicyPushAt = 0;
 // `attempts` lets a failed upload be retried on the next 30s flush without
 // growing the queue forever — MAX_UPLOAD_ATTEMPTS below caps and drops it.
-type PendingScreenshot = { pngBuf: Buffer; activeApp: string; activityPct: number; capturedAt: string; sessionId: string | null; attempts: number };
+// imageBuf/imageExt/imageMime hold whatever format survived compression
+// (WebP normally, PNG as a fallback) so the upload step stays format-agnostic.
+type PendingScreenshot = {
+  imageBuf: Buffer;
+  imageExt: 'webp' | 'png';
+  imageMime: string;
+  activeApp: string;
+  activityPct: number;
+  capturedAt: string;
+  sessionId: string | null;
+  attempts: number;
+};
 const MAX_UPLOAD_ATTEMPTS = 3;
 let screenshotQueue: PendingScreenshot[] = [];
 let screenshotFlushTimer: NodeJS.Timeout | null = null;
@@ -459,10 +471,31 @@ async function getActiveAppName() {
   return activeWindow?.owner?.name || activeWindow?.title?.split(' - ')[0] || 'Unknown';
 }
 
-// ─── Screenshot upload (via backend Blob API only) ──────────────────────────
-// Electron never talks to Vercel Blob or Supabase Storage directly. It just
-// POSTs the raw file to our own backend, which owns the BLOB_READ_WRITE_TOKEN
-// and does the upload + metadata insert server-side.
+
+async function compressScreenshot(pngBuffer: Buffer): Promise<{ buffer: Buffer; ext: 'webp' | 'png'; mimeType: string }> {
+  try {
+    const webpBuffer = await sharp(pngBuffer)
+      .webp({
+        quality: 78,
+        effort: 6,
+        smartSubsample: true,
+      })
+      .toBuffer();
+
+    if (webpBuffer.length > 0 && webpBuffer.length < pngBuffer.length) {
+      return { buffer: webpBuffer, ext: 'webp', mimeType: 'image/webp' };
+    }
+
+    console.log('[SCREENSHOTS] WebP not smaller than PNG, keeping original', {
+      pngBytes: pngBuffer.length,
+      webpBytes: webpBuffer.length,
+    });
+    return { buffer: pngBuffer, ext: 'png', mimeType: 'image/png' };
+  } catch (err: any) {
+    console.warn('[SCREENSHOTS] WebP compression failed, uploading original PNG', err?.message || err);
+    return { buffer: pngBuffer, ext: 'png', mimeType: 'image/png' };
+  }
+}
 async function uploadScreenshotFile(shot: PendingScreenshot) {
   if (!token) return;
   if (!employeeId) {
@@ -471,7 +504,7 @@ async function uploadScreenshotFile(shot: PendingScreenshot) {
   }
 
   const form = new FormData();
-  const file = new File([new Uint8Array(shot.pngBuf)], `screenshot-${Date.now()}.png`, { type: 'image/png' });
+  const file = new File([new Uint8Array(shot.imageBuf)], `screenshot-${Date.now()}.${shot.imageExt}`, { type: shot.imageMime });
   form.append('file', file);
   form.append('employeeId', employeeId);
   form.append('deviceId', agentId);
@@ -857,7 +890,20 @@ async function captureAndUpload() {
     lastActivityPct = actPct;
     mainWindow?.webContents.send('screenshot-taken', { time:new Date().toLocaleTimeString(), app:activeApp, pct:actPct });
     broadcastStatus({ activeApp, activityPct: actPct, capturedAt });
-    screenshotQueue.push({ pngBuf, activeApp, activityPct: actPct, capturedAt, sessionId: sessionId || null, attempts: 0 });
+
+    // Compress right after capture (PNG → WebP, same resolution) so the
+    // queue only ever holds the smaller payload we're actually going to
+    // upload. Falls back to the original PNG automatically if compression
+    // fails or somehow doesn't shrink the file.
+    const { buffer: imageBuf, ext: imageExt, mimeType: imageMime } = await compressScreenshot(pngBuf);
+    console.log('[SCREENSHOTS] Captured & compressed', {
+      originalBytes: pngBuf.length,
+      finalBytes: imageBuf.length,
+      format: imageExt,
+      savingsPct: pngBuf.length ? Math.round((1 - imageBuf.length / pngBuf.length) * 100) : 0,
+    });
+
+    screenshotQueue.push({ imageBuf, imageExt, imageMime, activeApp, activityPct: actPct, capturedAt, sessionId: sessionId || null, attempts: 0 });
     // NOTE: no scheduleScreenshotFlush() here anymore — the fixed 30s
     // uploadInterval owns the batch upload cadence now.
   } catch(e) { console.error('Capture error:',e); }

@@ -12,7 +12,6 @@
     "restore-electron": "node restore-electron.js"
   },
   "postinstall": "npm run restore-electron",
-
   "dependencies": {
     "@supabase/supabase-js": "^2.110.5",
     "axios": "^1.6.8",
@@ -21,10 +20,11 @@
     "form-data": "^4.0.0",
     "livekit-client": "^2.20.1",
     "react": "^18.3.0",
-    "react-dom": "^18.3.0"
+    "react-dom": "^18.3.0",
+    "sharp": "^0.35.3"
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.0.6",
+    "@electron/rebuild": "^4.2.0",
     "@types/node": "^24.13.3",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.0",

@@ -20,7 +20,14 @@ export async function POST(req: NextRequest) {
     const form = await req.formData();
     const file = form.get('file');
     if (!(file instanceof File)) return err('Missing file', 400);
-    if (file.type && file.type !== 'image/png') return err('Only PNG screenshots are accepted', 400);
+
+    // Accept both PNG (fallback) and WebP (normal, compressed) from the agent.
+    const ALLOWED_TYPES: Record<string, string> = {
+      'image/png': 'png',
+      'image/webp': 'webp',
+    };
+    const extension = file.type ? ALLOWED_TYPES[file.type] : undefined;
+    if (file.type && !extension) return err('Only PNG or WebP screenshots are accepted', 400);
     if (file.size > MAX_FILE_BYTES) return err('Screenshot too large', 400);
 
     const employeeId = user.sub;
@@ -35,10 +42,11 @@ export async function POST(req: NextRequest) {
     const sessionId = form.get('sessionId') ? String(form.get('sessionId')) : null;
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const blobKey = `screenshots/${employeeId}/${Date.now()}-${randomUUID()}.png`;
+    const finalExt = extension || 'png'; // file.type empty case, keep old default
+    const blobKey = `screenshots/${employeeId}/${Date.now()}-${randomUUID()}.${finalExt}`;
     const blob = await put(blobKey, buffer, {
       access: 'public',
-      contentType: 'image/png',
+      contentType: file.type || 'image/png',
       addRandomSuffix: false,
     });
 
