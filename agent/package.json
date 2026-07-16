@@ -8,8 +8,11 @@
     "generate:app-icon": "node scripts/generate-app-icon.cjs",
     "dev": "concurrently \"vite\" \"tsc -p tsconfig.electron.json --watch\" \"esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=build/capture-renderer.js --watch\" \"node scripts/copy-electron-assets.cjs\" \"wait-on http://localhost:5174 && wait-on build/main.js && electron .\"",
     "build": "node scripts/clean-release.cjs && npm run generate:embedded-config && npm run generate:app-icon && vite build && tsc -p tsconfig.electron.json && esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=build/capture-renderer.js && esbuild src/capture-preload.ts --bundle --platform=node --external:electron --format=cjs --outfile=build/capture-preload.js && node scripts/copy-electron-assets.cjs && node scripts/run-electron-builder.cjs",
-    "pack": "node scripts/clean-release.cjs && npm run generate:embedded-config && npm run generate:app-icon && electron-builder --dir"
+    "pack": "node scripts/clean-release.cjs && npm run generate:embedded-config && npm run generate:app-icon && electron-builder --dir",
+    "restore-electron": "node restore-electron.js"
   },
+  "postinstall": "npm run restore-electron",
+
   "dependencies": {
     "@supabase/supabase-js": "^2.110.5",
     "axios": "^1.6.8",
@@ -22,7 +25,7 @@
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.6",
-    "@types/node": "^20.12.7",
+    "@types/node": "^24.13.3",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^5.1.0",
@@ -31,6 +34,7 @@
     "electron-builder": "^26.15.3",
     "esbuild": "^0.25.0",
     "typescript": "^5.4.5",
+    "unzipper": "^0.11.0",
     "vite": "^6.4.3",
     "wait-on": "^7.2.0"
   },

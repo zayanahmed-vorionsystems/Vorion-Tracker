@@ -1,8 +1,9 @@
-// app/api/screenshots/route.ts
+﻿// app/api/screenshots/route.ts
 import { NextRequest } from 'next/server';
+import { randomUUID } from 'crypto';
+import { put, del } from '@vercel/blob';
 import { sql } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
-import { assertSupabaseAdmin } from '@/lib/supabase';
 import { emitSocketEvent } from '@/lib/socket';
 import { canDeleteRecords, canMonitorAll, normalizeRole } from '@/lib/roles';
 import {
@@ -22,12 +23,11 @@ function isAllowedScreenshotType(type: string) {
 
 export async function POST(req: NextRequest) {
   if (!process.env.DATABASE_URL) return err('Server misconfigured: DATABASE_URL not set', 500);
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return err('Server misconfigured: BLOB_READ_WRITE_TOKEN not set', 500);
   const user = requireAuth(req);
   if ('status' in user) return user;
 
   try {
-    const supabaseAdmin = assertSupabaseAdmin();
-
     const formData   = await req.formData();
     const file       = formData.get('screenshot') as File | null;
     const sessionId  = formData.get('sessionId') as string | null;
@@ -45,28 +45,22 @@ export async function POST(req: NextRequest) {
 
     const arrayBuffer = await file.arrayBuffer();
     const buffer      = Buffer.from(arrayBuffer);
-    const filePath    = `screenshots/${user.sub}/${Date.now()}.png`;
+    const extension   = file.type === 'image/jpeg' ? 'jpg' : 'png';
+    const blobKey      = `screenshots/${user.sub}/${Date.now()}-${randomUUID()}.${extension}`;
 
-    const { error: uploadError } = await supabaseAdmin.storage
-      .from('screenshots')
-      .upload(filePath, buffer, { contentType: file.type || 'image/png' });
-
-    if (uploadError) {
-      console.error('Supabase upload error', uploadError);
-      return err('Failed to upload screenshot', 500);
-    }
-
-    const publicUrl = supabaseAdmin.storage.from('screenshots').getPublicUrl(filePath).data?.publicUrl || '';
+    const blob = await put(blobKey, buffer, {
+      access: 'public',
+      contentType: file.type || 'image/png',
+      addRandomSuffix: false,
+    });
+    const publicUrl = blob.url;
 
     const [ss] = await sql`
-      INSERT INTO screenshots (employee_id, file_url, captured_at, active_app, activity_pct, session_id)
+      INSERT INTO screenshots (employee_id, blob_url, captured_at, active_app, activity_pct, session_id)
       VALUES (${user.sub}, ${publicUrl}, ${capturedAt}, ${activeApp}, ${actPct}, ${sessionId})
       RETURNING id
     `;
 
-    // A screenshot proves the agent is connected, not that keyboard or mouse
-    // input occurred. Preserve an idle/break status reported by the agent;
-    // otherwise periodic captures make an idle employee briefly look working.
     const presenceTimestamp = new Date().toISOString();
     const [presenceRow] = await sql`
       INSERT INTO employee_status(employee_id, current_status, current_app, last_activity, updated_at)
@@ -138,7 +132,7 @@ export async function GET(req: NextRequest) {
 
     if (role === 'employee') {
       rows = await sql`
-        SELECT s.id, s.employee_id, s.file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
+        SELECT s.id, s.employee_id, s.blob_url AS file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
         FROM screenshots s
         JOIN public.profiles p ON p.id = s.employee_id
         WHERE s.employee_id = ${sub}
@@ -176,7 +170,7 @@ export async function GET(req: NextRequest) {
         const secondWindow = shiftWindows[1] || firstWindow;
         const hasSecondWindow = shiftWindows.length > 1;
         const chunk = await sql`
-          SELECT s.id, s.employee_id, s.file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
+          SELECT s.id, s.employee_id, s.blob_url AS file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
           FROM screenshots s
           JOIN public.profiles p ON p.id = s.employee_id
           WHERE s.employee_id = ${assigned.id}
@@ -203,7 +197,7 @@ export async function GET(req: NextRequest) {
     } else if (canMonitorAll(role)) {
       if (filterUserId) {
         rows = await sql`
-          SELECT s.id, s.employee_id, s.file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
+          SELECT s.id, s.employee_id, s.blob_url AS file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
           FROM screenshots s
           JOIN public.profiles p ON p.id = s.employee_id
           WHERE s.employee_id = ${filterUserId}
@@ -214,7 +208,7 @@ export async function GET(req: NextRequest) {
         `;
       } else {
         rows = await sql`
-          SELECT s.id, s.employee_id, s.file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
+          SELECT s.id, s.employee_id, s.blob_url AS file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
           FROM screenshots s
           JOIN public.profiles p ON p.id = s.employee_id
           WHERE DATE(s.captured_at) = ${date}
@@ -252,21 +246,17 @@ export async function DELETE(req: NextRequest) {
   if (!id) return err('Missing screenshot id', 400);
 
   try {
-    const rows = await sql`SELECT id, employee_id, file_url FROM screenshots WHERE id = ${id} LIMIT 1`;
+    const rows = await sql`SELECT id, employee_id, blob_url FROM screenshots WHERE id = ${id} LIMIT 1`;
     const rec = rows?.[0];
     if (!rec) return err('Screenshot not found', 404);
 
     try {
-      const fileUrl: string = rec.file_url || '';
-      const m = fileUrl.match(/screenshots\/(.*)$/);
-      if (m && m[1]) {
-        const objectPath = `screenshots/${m[1]}`;
-        const supabaseAdmin = assertSupabaseAdmin();
-        const { error: removeErr } = await supabaseAdmin.storage.from('screenshots').remove([objectPath]);
-        if (removeErr) console.warn('Failed to remove screenshot from storage', removeErr);
+      const blobUrl: string = rec.blob_url || '';
+      if (blobUrl) {
+        await del(blobUrl);
       }
     } catch (e:any) {
-      console.warn('Error removing file from storage:', e?.message || e);
+      console.warn('Error removing file from Blob storage:', e?.message || e);
     }
 
     await sql`DELETE FROM screenshots WHERE id = ${id}`;

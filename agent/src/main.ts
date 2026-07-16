@@ -1,4 +1,3 @@
-// agent/src/main.ts  — Electron main process
 import * as dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
@@ -36,7 +35,6 @@ function loadAgentEnv() {
   // Packaged builds carry generated embedded configuration. Loading .env files
   // from the launch directory lets an unrelated local file redirect credentials.
   if (app.isPackaged) return;
-
   const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR || '';
   const executableDir = process.execPath ? path.dirname(process.execPath) : '';
   const cwd = process.cwd();
@@ -265,12 +263,14 @@ let isQuitting   = false;
 let allowImmediateQuit = false;
 let quitInFlight: Promise<void> | null = null;
 let ssInterval:         NodeJS.Timeout|null = null;
+let uploadInterval:     NodeJS.Timeout|null = null;
 let idleInterval:       NodeJS.Timeout|null = null;
 let heartbeatInterval:  NodeJS.Timeout|null = null;
 let policyInterval:     NodeJS.Timeout|null = null;
 let scanInterval:       NodeJS.Timeout|null = null;
 let policySyncInterval: NodeJS.Timeout|null = null;
-let captureIntervalSec = parseInt(get('captureIntervalSec')||'5');
+let captureIntervalSec = parseInt(get('captureIntervalSec')||'5');   // capture cadence: how often a screenshot is taken locally
+const uploadIntervalSec = 30;                                        // upload cadence: how often the queue is flushed as one batch API call
 let lastActiveApp    = 'Unknown';
 let lastActivityPct  = 100;
 let cachedPolicy:         any   = null;
@@ -280,7 +280,10 @@ let policySyncInFlight = false;
 let policyRealtimeClient: ReturnType<typeof createClient> | null = null;
 let policyRealtimeChannel: any = null;
 let lastPolicyPushAt = 0;
-type PendingScreenshot = { pngBuf: Buffer; activeApp: string; activityPct: number; capturedAt: string; sessionId: string | null };
+// `attempts` lets a failed upload be retried on the next 30s flush without
+// growing the queue forever — MAX_UPLOAD_ATTEMPTS below caps and drops it.
+type PendingScreenshot = { pngBuf: Buffer; activeApp: string; activityPct: number; capturedAt: string; sessionId: string | null; attempts: number };
+const MAX_UPLOAD_ATTEMPTS = 3;
 let screenshotQueue: PendingScreenshot[] = [];
 let screenshotFlushTimer: NodeJS.Timeout | null = null;
 let screenshotFlushInFlight = false;
@@ -385,9 +388,9 @@ async function apiFormRequest(path:string, form:any) {
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const res  = await fetch(url.toString(), { method:'POST', headers, body: form });
   const body = await res.text();
-  if (!body) { if (res.ok) return {}; throw new Error(`Request failed ${res.status}`); }
+  if (!body) { if (res.ok) return {}; throw new HttpError(`Request failed ${res.status}`, res.status); }
   const parsed = JSON.parse(body);
-  if (!res.ok) throw new Error(parsed?.error || `Request failed ${res.status}`);
+  if (!res.ok) throw new HttpError(parsed?.error || `Request failed ${res.status}`, res.status);
   return parsed;
 }
 
@@ -456,20 +459,28 @@ async function getActiveAppName() {
   return activeWindow?.owner?.name || activeWindow?.title?.split(' - ')[0] || 'Unknown';
 }
 
-async function uploadScreenshot(pngBuf: Buffer, activeApp:string, actPct:number, capturedAt:string) {
+// ─── Screenshot upload (via backend Blob API only) ──────────────────────────
+// Electron never talks to Vercel Blob or Supabase Storage directly. It just
+// POSTs the raw file to our own backend, which owns the BLOB_READ_WRITE_TOKEN
+// and does the upload + metadata insert server-side.
+async function uploadScreenshotFile(shot: PendingScreenshot) {
   if (!token) return;
-  try {
-    const form = new FormData();
-    const file = new File([new Uint8Array(pngBuf)], `screenshot-${Date.now()}.png`, { type: 'image/png' });
-    form.append('screenshot', file);
-    form.append('activeApp', activeApp);
-    form.append('activityPct', String(actPct));
-    form.append('capturedAt', capturedAt);
-    if (sessionId) form.append('sessionId', sessionId);
-    await apiFormRequest('/api/screenshots', form);
-  } catch (err:any) {
-    console.error('Failed to upload screenshot:', err?.message || err);
+  if (!employeeId) {
+    console.warn('[SCREENSHOTS] Skipping upload — no employeeId in session yet');
+    return;
   }
+
+  const form = new FormData();
+  const file = new File([new Uint8Array(shot.pngBuf)], `screenshot-${Date.now()}.png`, { type: 'image/png' });
+  form.append('file', file);
+  form.append('employeeId', employeeId);
+  form.append('deviceId', agentId);
+  form.append('activeApp', shot.activeApp);
+  form.append('activityPct', String(shot.activityPct));
+  form.append('capturedAt', shot.capturedAt);
+  if (shot.sessionId) form.append('sessionId', shot.sessionId);
+
+  await apiFormRequest('/api/upload/screenshot', form);
 }
 
 // ─── Alerts ────────────────────────────────────────────────────────────────
@@ -823,15 +834,21 @@ function getScreenshotTargetSize() {
   return { width: 1280, height: 720 };
 }
 
+// ─── Screenshot capture (local only) ────────────────────────────────────────
+// captureAndUpload only captures + pushes to the local queue. It no longer
+// triggers a flush itself — the fixed 30s `uploadInterval` (set up in
+// startTracking) owns the batch-upload cadence, decoupled from the 5s
+// capture cadence.
+let capturingScreenshot = false;
 async function captureAndUpload() {
-  if (!tracking) return;
+  if (!tracking || capturingScreenshot) return;
+  capturingScreenshot = true;
   try {
     const { width, height } = getScreenshotTargetSize();
     const sources = await desktopCapturer.getSources({ types:['screen'], thumbnailSize:{ width, height } });
     if (!sources.length) return;
     const resizedThumbnail = sources[0].thumbnail.resize({ width, height });
     const pngBuf = resizedThumbnail.toPNG();
-    const screenshotBase64 = pngBuf.toString('base64');
     const capturedAt       = new Date().toISOString();
     const activeApp = await getActiveAppName();
     const idleSec = powerMonitor.getSystemIdleTime();
@@ -839,27 +856,29 @@ async function captureAndUpload() {
     lastActiveApp   = activeApp;
     lastActivityPct = actPct;
     mainWindow?.webContents.send('screenshot-taken', { time:new Date().toLocaleTimeString(), app:activeApp, pct:actPct });
-    broadcastStatus({ screenshotBase64, activeApp, activityPct: actPct, capturedAt });
-    screenshotQueue.push({ pngBuf, activeApp, activityPct: actPct, capturedAt, sessionId: sessionId || null });
-    scheduleScreenshotFlush();
+    broadcastStatus({ activeApp, activityPct: actPct, capturedAt });
+    screenshotQueue.push({ pngBuf, activeApp, activityPct: actPct, capturedAt, sessionId: sessionId || null, attempts: 0 });
+    // NOTE: no scheduleScreenshotFlush() here anymore — the fixed 30s
+    // uploadInterval owns the batch upload cadence now.
   } catch(e) { console.error('Capture error:',e); }
+  finally { capturingScreenshot = false; }
 }
 
 // ─── Session management ─────────────────────────────────────────────────────
 async function startTracking() {
   if (tracking) return;
-
   tracking = true;
   status = 'active';
 
   await startSession();
   await ensureLiveWatchRunning();
 
-  ssInterval        = setInterval(captureAndUpload, captureIntervalSec * 1000);
-  idleInterval      = setInterval(watchIdle, 2000);
-  heartbeatInterval = setInterval(() => sendHeartbeat(), 30000);
-  policyInterval    = setInterval(() => { void enforcePolicies(); }, 5000);
-  scanInterval      = setInterval(() => { void scanBlockedApps(); void scanBlockedWebsites(); }, 2000);
+  ssInterval         = setInterval(captureAndUpload, captureIntervalSec * 1000);         // 5s capture
+  uploadInterval      = setInterval(() => { void flushScreenshotQueue(); }, uploadIntervalSec * 1000); // 30s batch upload
+  idleInterval       = setInterval(watchIdle, 2000);
+  heartbeatInterval  = setInterval(() => sendHeartbeat(), 30000);
+  policyInterval     = setInterval(() => { void enforcePolicies(); }, 5000);
+  scanInterval       = setInterval(() => { void scanBlockedApps(); void scanBlockedWebsites(); }, 2000);
   policySyncInterval = setInterval(() => { void syncPolicies(); }, 5 * 60 * 1000);
 
   void captureAndUpload();
@@ -876,13 +895,13 @@ async function startTracking() {
 
 async function stopTracking() {
   if (!tracking) return;
-
   tracking = false;
   status = 'offline';
 
   await endSession();
 
   ssInterval = clearTimer(ssInterval);
+  uploadInterval = clearTimer(uploadInterval);
   idleInterval = clearTimer(idleInterval);
   heartbeatInterval = clearTimer(heartbeatInterval);
   policyInterval = clearTimer(policyInterval);
@@ -894,11 +913,7 @@ async function stopTracking() {
   void flushScreenshotQueue();
 
   updateTray();
-
-  mainWindow?.webContents.send('tracking-status', {
-      tracking:false
-  });
-
+  mainWindow?.webContents.send('tracking-status', { tracking:false });
   broadcastStatus();
 }
 
@@ -920,6 +935,8 @@ async function watchIdle() {
 }
 
 function scheduleScreenshotFlush() {
+  // Kept as a server-side safety net (queue cap) — no longer wired up to
+  // captureAndUpload. The fixed uploadInterval (30s) drives normal flushes.
   if (screenshotFlushTimer || screenshotQueue.length >= 10) {
     if (screenshotQueue.length >= 10) void flushScreenshotQueue();
     return;
@@ -930,30 +947,32 @@ function scheduleScreenshotFlush() {
   }, 60_000);
 }
 
+// Flushes the local queue by POSTing each screenshot directly to our backend's
+// Blob-backed upload endpoint. No signed URLs, no direct-to-storage traffic —
+// the backend is the only thing that ever talks to Vercel Blob.
 async function flushScreenshotQueue() {
   if (screenshotFlushInFlight || !screenshotQueue.length || !token) return;
   screenshotFlushInFlight = true;
   const batch = screenshotQueue.splice(0, 10);
   try {
-    const prepared = await apiRequest('POST', '/api/agent/screenshots/upload-urls', { count: batch.length });
-    const uploads = Array.isArray(prepared?.uploads) ? prepared.uploads : [];
-    if (uploads.length !== batch.length) throw new Error('Upload URL count did not match screenshot batch');
-    await Promise.all(batch.map(async (shot, index) => {
-      const response = await fetch(String(uploads[index].signedUrl), {
-        method: 'PUT', headers: { 'Content-Type': 'image/png' }, body: new Uint8Array(shot.pngBuf),
-      });
-      if (!response.ok) throw new Error(`Direct screenshot upload failed (${response.status})`);
+    await Promise.all(batch.map(async (shot) => {
+      try {
+        await uploadScreenshotFile(shot);
+      } catch (error: any) {
+        const nextAttempts = shot.attempts + 1;
+        if (nextAttempts < MAX_UPLOAD_ATTEMPTS) {
+          console.warn(`[SCREENSHOTS] Upload failed (attempt ${nextAttempts}/${MAX_UPLOAD_ATTEMPTS}), will retry next flush:`, error?.message || error);
+          screenshotQueue.push({ ...shot, attempts: nextAttempts });
+        } else {
+          console.error(`[SCREENSHOTS] Upload failed ${MAX_UPLOAD_ATTEMPTS} times, dropping screenshot:`, error?.message || error);
+        }
+      }
     }));
-    await apiRequest('POST', '/api/agent/screenshots/commit', {
-      screenshots: batch.map((shot, index) => ({ path: uploads[index].path, activeApp: shot.activeApp, activityPct: shot.activityPct, capturedAt: shot.capturedAt, sessionId: shot.sessionId })),
-    });
-  } catch (error: any) {
-    // Existing endpoint is retained as an outage/upgrade fallback; no capture is lost.
-    console.warn('[SCREENSHOTS] Direct batch failed; using legacy upload:', error?.message || error);
-    await Promise.all(batch.map((shot) => uploadScreenshot(shot.pngBuf, shot.activeApp, shot.activityPct, shot.capturedAt)));
   } finally {
     screenshotFlushInFlight = false;
-    if (screenshotQueue.length) scheduleScreenshotFlush();
+    // NOTE: no self-rescheduling here — uploadInterval already fires every
+    // 30s regardless, so re-arming scheduleScreenshotFlush would just create
+    // a second, redundant flush path. Left only as the >=10-item safety net.
   }
 }
 
@@ -1140,6 +1159,7 @@ ipcMain.handle('start-break',      async (event) => {
   assertMainRenderer(event);
   status = 'break';
   ssInterval = clearTimer(ssInterval);
+  uploadInterval = clearTimer(uploadInterval);
   heartbeatInterval = clearTimer(heartbeatInterval);
   await sessionAction('start_break', { sessionId });
   broadcastStatus();
@@ -1150,8 +1170,10 @@ ipcMain.handle('end-break', async (event) => {
   status = 'active';
   await sessionAction('end_break', { sessionId });
   ssInterval = clearTimer(ssInterval);
+  uploadInterval = clearTimer(uploadInterval);
   heartbeatInterval = clearTimer(heartbeatInterval);
   ssInterval        = setInterval(captureAndUpload, captureIntervalSec * 1000);
+  uploadInterval    = setInterval(() => { void flushScreenshotQueue(); }, uploadIntervalSec * 1000);
   heartbeatInterval = setInterval(() => sendHeartbeat(), 30000);
   broadcastStatus();
   return { ok: true };

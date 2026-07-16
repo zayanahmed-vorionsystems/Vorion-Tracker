@@ -1,0 +1,27 @@
+const path = require('path');
+const fs = require('fs');
+const extract = require('extract-zip');
+const zipPath = path.join(process.env.LOCALAPPDATA || process.env.USERPROFILE, 'electron', 'Cache', '41a5d68646d956d50e13830e121ea0b3d6ab378b6a0ce422aefc1ff214707879', 'electron-v39.8.10-win32-x64.zip');
+const dest = path.resolve(__dirname, 'node_modules', 'electron', 'dist_space test');
+if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
+console.log('zipPath:', zipPath);
+console.log('dest:', dest);
+extract(zipPath, { dir: dest })
+  .then(() => {
+    console.log('extract success');
+    const list = [];
+    const walk = dir => {
+      for (const name of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, name.name);
+        list.push(p.replace(dest + path.sep, ''));
+        if (name.isDirectory()) walk(p);
+      }
+    };
+    walk(dest);
+    console.log('count', list.length);
+    console.log(list.join('\n'));
+  })
+  .catch(err => {
+    console.error('extract error', err);
+    process.exit(1);
+  });
