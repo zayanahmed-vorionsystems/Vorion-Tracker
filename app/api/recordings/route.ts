@@ -1,8 +1,8 @@
 // app/api/recordings/route.ts
 import { NextRequest } from 'next/server';
+import { put } from '@vercel/blob';
 import { sql } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
-import { assertSupabaseAdmin } from '@/lib/supabase';
 import { emitSocketEvent } from '@/lib/socket';
 import { canMonitorAll, normalizeRole } from '@/lib/roles';
 
@@ -18,14 +18,6 @@ export async function POST(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
 
-  let admin;
-  try {
-    admin = assertSupabaseAdmin();
-  } catch (e: any) {
-    console.error('[recordings] Supabase admin unavailable:', e?.message || e);
-    return err(e?.message || 'Server misconfigured: Supabase admin unavailable', 500);
-  }
-
   const formData   = await req.formData();
   const file       = formData.get('recording') as File | null;
   const sessionId  = formData.get('sessionId') as string | null;
@@ -40,20 +32,14 @@ export async function POST(req: NextRequest) {
     return err('Unsupported recording file type', 400);
   }
 
-  const arrayBuffer = await file.arrayBuffer();
-  const buffer      = Buffer.from(arrayBuffer);
   const filePath    = `recordings/${user.sub}/${Date.now()}.webm`;
-
-  const { error: uploadError } = await admin.storage
-    .from('recordings')
-    .upload(filePath, buffer, { contentType: file.type || 'audio/webm' });
-
-  if (uploadError) {
-    console.error('Supabase upload error', uploadError);
-    return err('Failed to upload recording', 500);
-  }
-
-  const publicUrl = admin.storage.from('recordings').getPublicUrl(filePath).data?.publicUrl || '';
+  const blob = await put(filePath, file, {
+    access: 'public',
+    contentType: file.type || 'video/webm',
+    addRandomSuffix: false,
+    multipart: true,
+  });
+  const publicUrl = blob.url;
 
   try {
     const [rec] = await sql`

@@ -1,4 +1,5 @@
 import { LocalVideoTrack, Room, RoomEvent, Track } from 'livekit-client';
+import { ChunkRecorder } from './chunkRecorder';
 
 type LivePublisher = {
   onStart: (callback: (payload: PublisherStartPayload) => void) => void;
@@ -26,6 +27,7 @@ let localTrack: LocalVideoTrack | null = null;
 let mediaStream: MediaStream | null = null;
 let currentSessionKey = '';
 let desiredConfig: PublisherStartPayload | null = null;
+let chunkRecorder: ChunkRecorder | null = null;
 
 function log(payload: Record<string, unknown>) {
   try {
@@ -38,6 +40,9 @@ function log(payload: Record<string, unknown>) {
 async function stopPublishing() {
   desiredConfig = null;
   currentSessionKey = '';
+
+  chunkRecorder?.stop();
+  chunkRecorder = null;
 
   if (room && localTrack) {
     try {
@@ -141,6 +146,16 @@ async function startPublishing(config: PublisherStartPayload) {
 
   room = nextRoom;
   currentSessionKey = nextSessionKey;
+
+  // Start the parallel chunked file recorder using the same MediaStream
+  // that's being published live (set inside createScreenTrack() above).
+  // Independent MediaRecorder instance, does not affect the LiveKit publish.
+  if (mediaStream) {
+    chunkRecorder = new ChunkRecorder(mediaStream, config.sessionId, config.employeeId);
+    chunkRecorder.start();
+  } else {
+    log({ state: 'chunk-recorder-skipped', reason: 'mediaStream not available' });
+  }
 
   track.mediaStreamTrack.addEventListener('ended', () => {
     if (desiredConfig && currentSessionKey === nextSessionKey) {

@@ -23,14 +23,16 @@ function pickMimeType(): string {
 export class ChunkRecorder {
   private recorder: MediaRecorder | null = null;
   private sessionId: string;
+  private employeeId: string;
   private chunkIndex = 0;
   private chunkStart: string = '';
   private stream: MediaStream;
   private stopped = false;
 
-  constructor(stream: MediaStream, sessionId: string) {
+  constructor(stream: MediaStream, sessionId: string, employeeId: string) {
     this.stream = stream;
     this.sessionId = sessionId;
+    this.employeeId = employeeId;
   }
 
   start() {
@@ -63,9 +65,9 @@ export class ChunkRecorder {
       const blob = new Blob(parts, { type: mimeType });
       const buffer = await blob.arrayBuffer();
 
-      // window.recordingBridge is exposed via preload (contextBridge).
       window.recordingBridge?.sendChunk({
         sessionId: this.sessionId,
+        employeeId: this.employeeId,
         chunkIndex,
         startTime: this.chunkStart,
         endTime,
@@ -80,10 +82,6 @@ export class ChunkRecorder {
     recorder.start();
     this.recorder = recorder;
 
-    // Stop this chunk's recorder after CHUNK_MS; onstop fires, uploads it,
-    // and starts the next chunk. This is a rolling window, not a single
-    // long-lived recorder, so a mid-recording crash only loses the current
-    // (in-flight) chunk, not the whole session.
     setTimeout(() => {
       if (recorder.state !== 'inactive') recorder.stop();
     }, CHUNK_MS);
@@ -95,6 +93,7 @@ declare global {
     recordingBridge?: {
       sendChunk: (payload: {
         sessionId: string;
+        employeeId: string;
         chunkIndex: number;
         startTime: string;
         endTime: string;

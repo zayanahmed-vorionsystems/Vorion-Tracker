@@ -2,6 +2,8 @@ import { BrowserWindow, ipcMain, desktopCapturer, screen, app } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import { apiFormRequest } from './http-client';
+import { getCaptureWindowId } from './live-watch';
+
 type RecordingConfig = {
   employeeId: string;
   sessionId: string;
@@ -128,10 +130,18 @@ function bindIpcListeners() {
     console.log('[AGENT][RECORDING]', payload);
   });
 
-  // A finished 60s chunk arrives as raw bytes + metadata. Written to disk
+  // A finished chunk arrives as raw bytes + metadata. Written to disk
   // immediately so a crash mid-upload never loses the chunk outright.
+  //
+  // CHANGED: chunks can now arrive from either the standalone recording
+  // window (record.html) OR the capture window (capture.html, which runs
+  // the LiveKit publisher + the parallel ChunkRecorder off the same
+  // MediaStream). Both are trusted, first-party renderer windows created by
+  // this app, so both webContents ids are accepted here.
   ipcMain.on('recording:chunk-ready', (event, meta: ChunkMeta, buffer: ArrayBuffer) => {
-    if (!recordingWindow || event.sender.id !== recordingWindow.webContents.id) return;
+    const isFromRecordingWindow = Boolean(recordingWindow) && event.sender.id === recordingWindow!.webContents.id;
+    const isFromCaptureWindow = event.sender.id === getCaptureWindowId();
+    if (!isFromRecordingWindow && !isFromCaptureWindow) return;
     void handleChunkReady(meta, Buffer.from(buffer));
   });
 
@@ -187,6 +197,7 @@ async function uploadChunk(chunk: PendingChunk) {
 
   await apiFormRequest(activeServerUrl, activeAuthToken, '/api/upload/recording', form);
 }
+
 async function uploadWithRetry(chunk: PendingChunk) {
   enqueue(chunk);
 

@@ -1,7 +1,7 @@
-﻿import { BrowserWindow, desktopCapturer, ipcMain, screen } from 'electron';
+import { BrowserWindow, desktopCapturer, ipcMain, screen } from 'electron';
 import fs from 'fs';
 import path from 'path';
-import { startRecording, stopRecording } from './recordingmanager';
+
 type LiveWatchConfig = {
   employeeId: string;
   sessionId: string;
@@ -139,7 +139,7 @@ async function waitForCaptureWindow() {
       }),
     ]);
   } catch (error) {
-    // Stuck/broken window â€” destroy it so the next attempt gets a fresh one.
+    // Stuck/broken window — destroy it so the next attempt gets a fresh one.
     if (captureWindow && !captureWindow.isDestroyed()) {
       captureWindow.destroy();
     }
@@ -150,21 +150,7 @@ async function waitForCaptureWindow() {
     throw error;
   }
 }
-async function ensureLiveWatchRunning(tracking?: boolean, token?: string, employeeId?: string, sessionId?: string, SERVER_URL?: string) {
-  if (!tracking || !token || !employeeId || !sessionId) return;
 
-  try {
-    await setupLiveWatch({ employeeId, sessionId, authToken: token, serverUrl: SERVER_URL || '' });
-  } catch (err: any) {
-    console.error('Failed to start live watch:', err?.message || err);
-  }
-
-  try {
-    await startRecording({ employeeId, sessionId, authToken: token, serverUrl: SERVER_URL || '' });
-  } catch (err: any) {
-    console.error('Failed to start recording:', err?.message || err);
-  }
-}
 async function getScreenSourceId() {
   const sources = await desktopCapturer.getSources({
     types: ['screen'],
@@ -250,4 +236,15 @@ export async function teardownLiveWatch(options: TeardownOptions = {}) {
   resolveCaptureReady = null;
 
   await postStopRoom(options);
+}
+
+/**
+ * Exposes the current capture window's webContents id so other modules
+ * (e.g. recordingmanager.ts) can validate that an IPC message — such as
+ * 'recording:chunk-ready' sent from the chunk recorder running inside this
+ * same capture window — actually came from a trusted sender, without
+ * needing their own reference to the BrowserWindow instance.
+ */
+export function getCaptureWindowId(): number | null {
+  return captureWindow && !captureWindow.isDestroyed() ? captureWindow.webContents.id : null;
 }

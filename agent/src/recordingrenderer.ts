@@ -7,6 +7,32 @@ type StartPayload = {
   chunkSeconds: number;
 };
 
+interface RecordingBridge {
+  sendChunk(payload: {
+    sessionId: string;
+    chunkIndex: number;
+    startTime: string;
+    endTime: string;
+    mimeType: string;
+    buffer: ArrayBuffer;
+  }): void;
+  setSession(creds: {
+    serverUrl: string;
+    authToken: string;
+    employeeId: string;
+  }): void;
+  onStart(callback: (payload: StartPayload) => void): void;
+  onStop(callback: () => void): void;
+  sendReady(): void;
+  log?(payload: Record<string, unknown>): void;
+}
+
+declare global {
+  interface Window {
+    recordingBridge?: RecordingBridge;
+  }
+}
+
 const globalScope = window as Window & typeof globalThis & {
   __worktrackRecordingRendererInitialized?: boolean;
 };
@@ -18,10 +44,12 @@ let chunkStartedAt = '';
 let currentBuffer: BlobPart[] = [];
 let stopping = false;
 let mimeType = '';
+let chunkIndex = 0;
 
 function log(payload: Record<string, unknown>) {
   try {
-    window.recordingBridge.log(payload);
+    const bridge = window.recordingBridge as unknown as { log?: (payload: Record<string, unknown>) => void };
+    bridge.log?.(payload);
   } catch {
     console.log('[AGENT][RECORDING]', payload);
   }
@@ -85,17 +113,16 @@ async function flushChunk(config: StartPayload) {
   const buffer = await blob.arrayBuffer();
   const durationSeconds = Math.max(1, Math.round((Date.parse(endedAt) - Date.parse(startedAt)) / 1000));
 
-  window.recordingBridge.sendChunk(
-    {
-      employeeId: config.employeeId,
-      sessionId: config.sessionId,
-      startedAt,
-      endedAt,
-      durationSeconds,
-      mimeType: mimeType || 'video/webm',
-    },
+  // sendChunk expects { sessionId, chunkIndex, startTime, endTime, mimeType, buffer }
+  const thisChunk = chunkIndex++;
+  window.recordingBridge?.sendChunk?.({
+    sessionId: config.sessionId,
+    chunkIndex: thisChunk,
+    startTime: startedAt,
+    endTime: endedAt,
+    mimeType: mimeType || 'video/webm',
     buffer,
-  );
+  });
 
   // Rotation: only start the next chunk's recorder after this one's data
   // has actually been handed off, so we never drop a rotation boundary.

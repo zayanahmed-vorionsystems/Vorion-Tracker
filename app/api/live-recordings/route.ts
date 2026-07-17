@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server';
+import { put } from '@vercel/blob';
 import { sql } from '@/lib/db';
-import { supabaseAdmin } from '@/lib/supabase';
 import { requireAuth, ok, err } from '@/lib/api';
 import { canAccessLiveMonitor, normalizeRole } from '@/lib/roles';
 
@@ -28,6 +28,26 @@ export async function POST(request: NextRequest) {
   if ('status' in user) return user;
 
   try {
+    if (request.headers.get('content-type')?.includes('application/json')) {
+      const body = await request.json();
+      const employeeId = String(body?.employeeId || '');
+      if (!employeeId) return err('Employee id is required.', 400);
+      if (!(await canManageLiveRecording(user, employeeId))) return err('Forbidden', 403);
+
+      const fileUrl = String(body?.fileUrl || '');
+      if (!/^https:\/\/.+\.blob\.vercel-storage\.com\//i.test(fileUrl)) return err('Invalid recording URL.', 400);
+
+      return ok({
+        ok: true,
+        employeeId,
+        adminId: user.sub,
+        startTime: String(body?.startTime || new Date().toISOString()),
+        endTime: String(body?.endTime || new Date().toISOString()),
+        duration: Number(body?.duration || 0),
+        fileUrl,
+      });
+    }
+
     const formData = await request.formData();
     const employeeId = String(formData.get('employeeId') || '');
     const startTime = String(formData.get('startTime') || new Date().toISOString());
@@ -60,33 +80,33 @@ export async function POST(request: NextRequest) {
     const fileName = `live-${employeeId || 'unknown'}-${Date.now()}.webm`;
 
     if (supabaseAdmin) {
-  const { data, error } = await supabaseAdmin.storage
-    .from('live-recordings')
-    .upload(fileName, buffer, {
-      contentType: file.type || 'video/webm',
-      cacheControl: '3600',
-      upsert: false,
-    });
+      const { data, error } = await supabaseAdmin.storage
+        .from('live-recordings')
+        .upload(fileName, buffer, {
+          contentType: file.type || 'video/webm',
+          cacheControl: '3600',
+          upsert: false,
+        });
 
-  if (error) {
-    console.error('[live-recordings] Supabase upload failed', error);
-    return err(error.message, 500);
-  }
+      if (error) {
+        console.error('[live-recordings] Supabase upload failed', error);
+        return err(error.message, 500);
+      }
 
-  const { data: signedData } = await supabaseAdmin.storage
-    .from('live-recordings')
-    .createSignedUrl(data?.path || fileName, 60 * 60);
+      const { data: signedData } = await supabaseAdmin.storage
+        .from('live-recordings')
+        .createSignedUrl(data?.path || fileName, 60 * 60);
 
-  return ok({
-    ok: true,
-    employeeId,
-    adminId: user.sub,
-    startTime,
-    endTime,
-    duration,
-    fileUrl: signedData?.signedUrl || null,
-  });
-}
+      return ok({
+        ok: true,
+        employeeId,
+        adminId: user.sub,
+        startTime,
+        endTime,
+        duration,
+        fileUrl: signedData?.signedUrl || null,
+      });
+    }
 
     return ok({
       ok: true,
@@ -95,7 +115,7 @@ export async function POST(request: NextRequest) {
       startTime,
       endTime,
       duration,
-      fileUrl: `data:${file.type || 'video/webm'};base64,${buffer.toString('base64')}`,
+      fileUrl: blob.url,
     });
   } catch (error: any) {
     console.error('[live-recordings] failed', error?.stack || error);

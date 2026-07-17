@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { sql } from '@/lib/db';
+import { getExistingColumns, queryRows, sql } from '@/lib/db';
 import { requireAuth, err, ok } from '@/lib/api';
 import { assertSupabaseAdmin } from '@/lib/supabase';
 import { hasSmtpConfig, sendScreenshotFlagReportEmail } from '@/lib/mailer';
@@ -18,6 +18,15 @@ function parseEmailList(value: FormDataEntryValue | null) {
     .filter(Boolean);
 }
 
+function getScreenshotUrlExpression(columns: Set<string>, tableAlias = 's') {
+  const hasBlobUrl = columns.has('blob_url');
+  const hasFileUrl = columns.has('file_url');
+  if (hasBlobUrl && hasFileUrl) return `COALESCE(${tableAlias}.blob_url, ${tableAlias}.file_url)`;
+  if (hasBlobUrl) return `${tableAlias}.blob_url`;
+  if (hasFileUrl) return `${tableAlias}.file_url`;
+  throw new Error('screenshots table is missing a URL column');
+}
+
 export async function GET(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
@@ -29,9 +38,21 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const employeeId = searchParams.get('employeeId');
     const date = searchParams.get('date');
+    const availableColumns = await getExistingColumns('screenshots', ['blob_url', 'file_url']);
+    const screenshotUrlExpression = getScreenshotUrlExpression(availableColumns);
+    const values: any[] = [];
+    const filters: string[] = [];
+    if (employeeId) {
+      values.push(employeeId);
+      filters.push(`sf.employee_id = $${values.length}`);
+    }
+    if (date) {
+      values.push(date);
+      filters.push(`DATE(s.captured_at) = $${values.length}`);
+    }
 
-    const rows = await sql`
-      SELECT
+    const rows = await queryRows(
+      `SELECT
         sf.id,
         sf.comment,
         sf.pdf_url,
@@ -42,26 +63,21 @@ export async function GET(req: NextRequest) {
         sf.created_at,
         sf.updated_at,
         s.id AS screenshot_id,
-        s.file_url AS screenshot_url,
+        ${screenshotUrlExpression} AS screenshot_url,
         s.captured_at,
+        sf.employee_id,
         employee.full_name AS employee_name,
         flagged_by.full_name AS flagged_by_name
       FROM screenshot_flags sf
       JOIN screenshots s ON s.id = sf.screenshot_id
       JOIN public.profiles employee ON employee.id = sf.employee_id
       JOIN public.profiles flagged_by ON flagged_by.id = sf.flagged_by
-      ORDER BY sf.created_at DESC
-    `;
-    const filtered = (rows || []).filter((row: any) => {
-      if (employeeId && String(row.employee_id || '') !== String(employeeId)) return false;
-      if (date) {
-        const rowDate = new Date(row.captured_at).toISOString().slice(0, 10);
-        if (rowDate !== date) return false;
-      }
-      return true;
-    });
+      ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
+      ORDER BY sf.created_at DESC`,
+      values,
+    );
 
-    return ok(filtered);
+    return ok(rows);
   } catch (e: any) {
     console.error('GET /api/screenshot-flags error:', e?.message || e);
     return err(e?.message || 'Failed to load screenshot flags', 500);
@@ -90,13 +106,16 @@ export async function POST(req: NextRequest) {
       return err('Only QA Managers can send report emails.', 403);
     }
 
-    const screenshotRows = await sql`
-      SELECT s.id, s.file_url, s.captured_at, s.employee_id, p.full_name AS employee_name
+    const availableColumns = await getExistingColumns('screenshots', ['blob_url', 'file_url']);
+    const screenshotUrlExpression = getScreenshotUrlExpression(availableColumns);
+    const screenshotRows = await queryRows(
+      `SELECT s.id, ${screenshotUrlExpression} AS file_url, s.captured_at, s.employee_id, p.full_name AS employee_name
       FROM screenshots s
       JOIN public.profiles p ON p.id = s.employee_id
-      WHERE s.id = ${screenshotId}
-      LIMIT 1
-    `;
+      WHERE s.id = $1
+      LIMIT 1`,
+      [screenshotId],
+    );
     const screenshot = screenshotRows?.[0];
     if (!screenshot) return err('Screenshot not found', 404);
 

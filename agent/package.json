@@ -1,6 +1,6 @@
 {
   "name": "worktrack-agent",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "description": "WorkTrack silent background agent — captures screenshots and tracks time",
   "main": "build/main.js",
   "scripts": {
@@ -14,7 +14,6 @@
   "postinstall": "npm run restore-electron",
   "dependencies": {
     "@supabase/supabase-js": "^2.110.5",
-    "active-win": "^8.2.1",
     "axios": "^1.6.8",
     "dotenv": "^17.4.2",
     "electron-log": "^5.4.4",

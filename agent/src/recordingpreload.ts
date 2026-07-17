@@ -1,15 +1,29 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+// ... existing LiveWatchStartPayload type + livePublisher block same rehne do ...
+chunkRecorder = new ChunkRecorder(stream, config.sessionId, config.employeeId);
 contextBridge.exposeInMainWorld('recordingBridge', {
-  onStart: (cb: (data: any) => void) => {
-    ipcRenderer.on('recording:start', (_event, payload) => cb(payload));
+  sendChunk: (payload: {
+    sessionId: string;
+    chunkIndex: number;
+    startTime: string;
+    endTime: string;
+    mimeType: string;
+    buffer: ArrayBuffer;
+  }) => {
+    ipcRenderer.send('recording:chunk-ready',
+      {
+        employeeId: payload.employeeId, // main process ke pass already sessionId->employeeId mapping honi chahiye
+        sessionId: payload.sessionId,
+        startedAt: payload.startTime,
+        endedAt: payload.endTime,
+        durationSeconds: Math.max(1, Math.round((Date.parse(payload.endTime) - Date.parse(payload.startTime)) / 1000)),
+        mimeType: payload.mimeType,
+      },
+      payload.buffer
+    );
   },
-  onStop: (cb: () => void) => {
-    ipcRenderer.on('recording:stop', () => cb());
-  },
-  sendReady: () => ipcRenderer.send('recording:ready'),
-  log: (payload: Record<string, unknown>) => ipcRenderer.send('recording:log', payload),
-  sendChunk: (meta: Record<string, unknown>, buffer: ArrayBuffer) => {
-    ipcRenderer.send('recording:chunk-ready', meta, buffer);
+  setSession: (creds: { serverUrl: string; authToken: string; employeeId: string }) => {
+    ipcRenderer.send('recording:set-session', creds);
   },
 });

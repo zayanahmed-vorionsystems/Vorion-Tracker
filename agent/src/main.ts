@@ -1,7 +1,7 @@
 import * as dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
-// Main-process deps must stay above bootstrap code so CommonJS emits them before use.
+
 import { app } from 'electron';
 import {
    BrowserWindow, Tray, Menu, nativeImage,
@@ -916,13 +916,12 @@ async function captureAndUpload() {
     });
 
     screenshotQueue.push({ imageBuf, imageExt, imageMime, activeApp, activityPct: actPct, capturedAt, sessionId: sessionId || null, attempts: 0 });
-    // NOTE: no scheduleScreenshotFlush() here anymore — the fixed 30s
-    // uploadInterval owns the batch upload cadence now.
+
   } catch(e) { console.error('Capture error:',e); }
   finally { capturingScreenshot = false; }
 }
 
-// ─── Session management ─────────────────────────────────────────────────────
+
 async function startTracking() {
   if (tracking) return;
   tracking = true;
@@ -959,7 +958,7 @@ async function stopTracking() {
   tracking = false;
   status = 'offline';
 
-  await endSession(); // also stops recording + resets recordingRequested
+  await endSession(); 
 
   ssInterval = clearTimer(ssInterval);
   uploadInterval = clearTimer(uploadInterval);
@@ -996,8 +995,7 @@ async function watchIdle() {
 }
 
 function scheduleScreenshotFlush() {
-  // Kept as a server-side safety net (queue cap) — no longer wired up to
-  // captureAndUpload. The fixed uploadInterval (30s) drives normal flushes.
+
   if (screenshotFlushTimer || screenshotQueue.length >= 10) {
     if (screenshotQueue.length >= 10) void flushScreenshotQueue();
     return;
@@ -1008,15 +1006,12 @@ function scheduleScreenshotFlush() {
   }, 60_000);
 }
 
-// Flushes the local queue by POSTing each screenshot directly to our backend's
-// Blob-backed upload endpoint. No signed URLs, no direct-to-storage traffic —
-// the backend is the only thing that ever talks to Vercel Blob.
+
 async function flushScreenshotQueue() {
   if (screenshotFlushInFlight || !screenshotQueue.length || !token) return;
   screenshotFlushInFlight = true;
   const batch = screenshotQueue.splice(0, 10);
-  const UPLOAD_CONCURRENCY = 3; // send at most 3 at once instead of all 10,
-                                 // so we don't burst the server's DB pool
+  const UPLOAD_CONCURRENCY = 3;
   try {
     for (let i = 0; i < batch.length; i += UPLOAD_CONCURRENCY) {
       const chunk = batch.slice(i, i + UPLOAD_CONCURRENCY);
@@ -1054,7 +1049,7 @@ function updateTray() {
   tray.setToolTip(tracking?`Vorion Tracker — tracking ${userName}`:'Vorion Tracker — not tracking');
 }
 
-// ─── Window ─────────────────────────────────────────────────────────────────
+
 async function createWindow() {
   const preloadPath = path.join(__dirname, 'preload.js');
   const indexPath = path.join(__dirname, 'renderer', 'index.html');
@@ -1162,7 +1157,6 @@ async function createWindow() {
   });
 }
 
-// ─── IPC ────────────────────────────────────────────────────────────────────
 function assertMainRenderer(event: Electron.IpcMainInvokeEvent) {
   if (!mainWindow || event.sender.id !== mainWindow.webContents.id) {
     throw new Error('Untrusted IPC sender');
@@ -1218,8 +1212,7 @@ ipcMain.handle('manual-shot',      (event) => { assertMainRenderer(event); retur
 ipcMain.handle('stop-tracking',    (event) => { assertMainRenderer(event); return stopTracking(); });
 ipcMain.handle('start-tracking',   (event) => { assertMainRenderer(event); status = 'active'; return startTracking(); });
 ipcMain.handle('start-work',       async (event) => { assertMainRenderer(event); status = 'active'; await startTracking(); return { ok: true }; });
-// NEW: explicit "Record" button handlers. Only these two set/clear
-// recordingRequested — nothing else in the app auto-starts recording.
+
 ipcMain.handle('start-recording', async (event) => {
   assertMainRenderer(event);
   if (!tracking) {
@@ -1258,9 +1251,6 @@ ipcMain.handle('end-break', async (event) => {
   ssInterval        = setInterval(captureAndUpload, captureIntervalSec * 1000);
   uploadInterval    = setInterval(() => { void flushScreenshotQueue(); }, uploadIntervalSec * 1000);
   heartbeatInterval = setInterval(() => sendHeartbeat(), 30000);
-  // Resumes LiveKit watch always, and resumes recording only if the user
-  // had it on (recordingRequested) before the break — same
-  // employeeId/sessionId/token that were active before the break.
   await ensureLiveWatchRunning();
   await ensureRecordingRunning();
   broadcastStatus();
@@ -1277,7 +1267,6 @@ ipcMain.handle('checkout', async (event) => {
   return { ok: true };
 });
 app.commandLine.appendSwitch('disable-features', 'DesktopCaptureUseDxgi,SpareRendererForSitePerProcess,CalculateNativeWinOcclusion');
-// ─── Boot ────────────────────────────────────────────────────────────────────
 app.whenReady().then(async ()=>{
   await createWindow();
   const iconPath = path.join(

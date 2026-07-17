@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { upload } from '@vercel/blob/client';
 import { Room, RoomEvent, Track } from 'livekit-client';
 import { useAuthStore, canSendAlerts } from '@/store/auth';
 import { useRouter } from 'next/navigation';
@@ -304,18 +305,33 @@ export default function LiveMonitorPage() {
       recorder.onstop = async () => {
         const blob = new Blob(recordedChunksRef.current, { type: recorder.mimeType || 'video/webm' });
         const durationMs = Date.now() - (recordingStartRef.current || Date.now());
-        const formData = new FormData();
-        formData.append('employeeId', selectedEmployeeRef.current?.id || '');
-        formData.append('adminId', user?.id || '');
-        formData.append('startTime', new Date(recordingStartRef.current || Date.now()).toISOString());
-        formData.append('endTime', new Date().toISOString());
-        formData.append('duration', String(Math.max(1, Math.round(durationMs / 1000))));
-        formData.append('file', blob, `live-${Date.now()}.webm`);
+        const employeeId = selectedEmployeeRef.current?.id || '';
+        const startTime = new Date(recordingStartRef.current || Date.now()).toISOString();
+        const endTime = new Date().toISOString();
+        const duration = Math.max(1, Math.round(durationMs / 1000));
         try {
+          const uploaded = await upload(`live-recordings/${employeeId}/live-${Date.now()}.webm`, blob, {
+            access: 'public',
+            contentType: blob.type || 'video/webm',
+            multipart: true,
+            handleUploadUrl: '/api/blob/client-upload',
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+            clientPayload: JSON.stringify({ kind: 'live-recording', employeeId }),
+          });
           const response = await fetch('/api/live-recordings', {
             method: 'POST',
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-            body: formData,
+            headers: {
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              employeeId,
+              adminId: user?.id || '',
+              startTime,
+              endTime,
+              duration,
+              fileUrl: uploaded.url,
+            }),
           });
           const data = await response.json();
           if (!response.ok) {

@@ -1,10 +1,22 @@
 import { NextRequest } from 'next/server';
 import { requireAuth, ok, err } from '@/lib/api';
-import { sql, withTransaction } from '@/lib/db';
-import { assertSupabaseAdmin } from '@/lib/supabase';
+import { getExistingColumns, withTransaction } from '@/lib/db';
 import { emitSocketEvent } from '@/lib/socket';
 
 const MAX_BATCH_SIZE = 30;
+
+function isVercelBlobUrl(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl);
+    return url.protocol === 'https:' && (
+      url.hostname.endsWith('.blob.vercel-storage.com')
+      || url.hostname.endsWith('.public.blob.vercel-storage.com')
+      || url.hostname.endsWith('.vercel-storage.com')
+    );
+  } catch {
+    return false;
+  }
+}
 
 export async function POST(req: NextRequest) {
   if (!process.env.DATABASE_URL) return err('Server misconfigured: DATABASE_URL not set', 500);
@@ -13,23 +25,48 @@ export async function POST(req: NextRequest) {
   try {
     const input = (await req.json())?.screenshots;
     if (!Array.isArray(input) || input.length < 1 || input.length > MAX_BATCH_SIZE) return err('screenshots must contain 1 to 30 items', 400);
-    const prefix = `screenshots/${user.sub}/`;
     const shots = input.map((item: any) => ({
-      path: String(item?.path || ''), activeApp: String(item?.activeApp || 'Unknown').slice(0, 500),
+      path: String(item?.path || ''), url: String(item?.url || item?.fileUrl || item?.blobUrl || ''),
+      deviceId: item?.deviceId ? String(item.deviceId).slice(0, 200) : null,
+      activeApp: String(item?.activeApp || 'Unknown').slice(0, 500),
       activityPct: Math.max(0, Math.min(100, Number.parseInt(String(item?.activityPct || 0), 10) || 0)),
       capturedAt: new Date(item?.capturedAt || Date.now()).toISOString(), sessionId: item?.sessionId ? String(item.sessionId) : null,
     }));
-    if (shots.some((shot) => !shot.path.startsWith(prefix) || !/\.png$/i.test(shot.path))) return err('Invalid screenshot path', 400);
-    const storage = assertSupabaseAdmin().storage.from('screenshots');
+    const prefix = `screenshots/${user.sub}/`;
+    if (shots.some((shot) => !shot.path.startsWith(prefix) || !/\.(png|webp|jpg|jpeg)$/i.test(shot.path) || !isVercelBlobUrl(shot.url))) return err('Invalid screenshot blob', 400);
+    const availableColumns = await getExistingColumns('screenshots', ['blob_url', 'file_url', 'device_id']);
     const saved = await withTransaction(async (client) => {
-      const rows = [];
-      for (const shot of shots) {
-        const fileUrl = storage.getPublicUrl(shot.path).data?.publicUrl || '';
-        const result = await client.query(
-          'INSERT INTO screenshots (employee_id, file_url, captured_at, active_app, activity_pct, session_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-          [user.sub, fileUrl, shot.capturedAt, shot.activeApp, shot.activityPct, shot.sessionId],
-        );
-        rows.push({ ...shot, id: result.rows[0].id, fileUrl });
+      const urlColumns = ['blob_url', 'file_url'].filter((column) => availableColumns.has(column));
+      if (!urlColumns.length) throw new Error('screenshots table is missing a URL column');
+
+      const hasDeviceId = availableColumns.has('device_id');
+      const columns = ['employee_id', ...(hasDeviceId ? ['device_id'] : []), ...urlColumns, 'captured_at', 'active_app', 'activity_pct', 'session_id'];
+      const values: any[] = [];
+      const valueRows = shots.map((shot, rowIndex) => {
+        const rowValues = [
+          user.sub,
+          ...(hasDeviceId ? [shot.deviceId] : []),
+          ...urlColumns.map(() => shot.url),
+          shot.capturedAt,
+          shot.activeApp,
+          shot.activityPct,
+          shot.sessionId,
+        ];
+        values.push(...rowValues);
+        const offset = rowIndex * rowValues.length;
+        return `(${rowValues.map((_, valueIndex) => `$${offset + valueIndex + 1}`).join(', ')})`;
+      });
+      const result = await client.query(
+        `INSERT INTO screenshots (${columns.join(', ')})
+         VALUES ${valueRows.join(', ')}
+         RETURNING id`,
+        values,
+      );
+      const rows = shots.map((shot, index) => {
+        return { ...shot, id: result.rows[index]?.id, fileUrl: shot.url };
+      });
+      if (rows.some((row) => !row.id)) {
+        throw new Error('Failed to save all screenshots');
       }
       const latest = rows[rows.length - 1];
       // Screenshots prove that the agent is connected, but they do not prove
@@ -46,7 +83,7 @@ export async function POST(req: NextRequest) {
     const presence = { employeeId: user.sub, employeeName: user.name, status: saved.status, currentApp: latest.activeApp, activityPct: latest.activityPct, lastActivity: new Date().toISOString(), timestamp: new Date().toISOString() };
     await emitSocketEvent('employee-status', presence, { toAdmins: true });
     await emitSocketEvent('employee-activity-updated', presence, { toAdmins: true });
-    await Promise.all(saved.rows.map((shot) => emitSocketEvent('new-screenshot', { userId: user.sub, userName: user.name, screenshotId: shot.id, fileUrl: shot.fileUrl, activeApp: shot.activeApp, activityPct: shot.activityPct, capturedAt: shot.capturedAt }, { toAdmins: true })));
+    await Promise.all(saved.rows.map((shot) => emitSocketEvent('new-screenshot', { userId: user.sub, userName: user.name, screenshotId: shot.id, fileUrl: shot.fileUrl, blobUrl: shot.fileUrl, activeApp: shot.activeApp, activityPct: shot.activityPct, capturedAt: shot.capturedAt }, { toAdmins: true })));
     return ok({ screenshots: saved.rows.map((shot) => ({ id: shot.id, path: shot.path })) }, 201);
   } catch (error: any) {
     console.error('POST /api/agent/screenshots/commit error:', error?.message || error);

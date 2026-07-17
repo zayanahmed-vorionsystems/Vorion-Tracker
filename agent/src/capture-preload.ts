@@ -8,6 +8,16 @@ type LiveWatchStartPayload = {
   sourceId: string;
 };
 
+type ChunkPayload = {
+  sessionId: string;
+  employeeId: string;
+  chunkIndex: number;
+  startTime: string;
+  endTime: string;
+  mimeType: string;
+  buffer: ArrayBuffer;
+};
+
 contextBridge.exposeInMainWorld('livePublisher', {
   /**
    * Registers a callback that fires when the main process sends
@@ -43,5 +53,39 @@ contextBridge.exposeInMainWorld('livePublisher', {
    */
   log: (payload: unknown) => {
     ipcRenderer.send('livekit:log', payload);
+  },
+});
+
+contextBridge.exposeInMainWorld('recordingBridge', {
+  /**
+   * Sends one finished chunk (raw bytes + metadata) from the capture
+   * renderer's ChunkRecorder up to the main process, where it's written to
+   * disk and queued for upload by recordingmanager.ts's existing
+   * 'recording:chunk-ready' handler.
+   */
+  sendChunk: (payload: ChunkPayload) => {
+    ipcRenderer.send(
+      'recording:chunk-ready',
+      {
+        employeeId: payload.employeeId,
+        sessionId: payload.sessionId,
+        startedAt: payload.startTime,
+        endedAt: payload.endTime,
+        durationSeconds: Math.max(
+          1,
+          Math.round((Date.parse(payload.endTime) - Date.parse(payload.startTime)) / 1000),
+        ),
+        mimeType: payload.mimeType,
+      },
+      payload.buffer,
+    );
+  },
+
+  /**
+   * Reserved for cases where session credentials need to be (re)pushed to
+   * an already-running recording pipeline without a full restart.
+   */
+  setSession: (creds: { serverUrl: string; authToken: string; employeeId: string }) => {
+    ipcRenderer.send('recording:set-session', creds);
   },
 });
