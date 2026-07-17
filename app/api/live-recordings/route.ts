@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
     });
     const blob = await put(fileName, file, {
       access: 'public',
-      contentType: file.type || 'video/webm',
+      contentType: 'video/webm',
       addRandomSuffix: false,
       multipart: true,
     });

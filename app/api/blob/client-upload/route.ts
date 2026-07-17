@@ -5,6 +5,13 @@ import { canAccessLiveMonitor, normalizeRole } from '@/lib/roles';
 
 const MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024;
 const MAX_RECORDING_BYTES = 100 * 1024 * 1024;
+const ALLOWED_WEBM_CONTENT_TYPES = [
+  'video/webm',
+  'video/webm;codecs=vp9',
+  'video/webm;codecs=vp9,opus',
+  'video/webm;codecs=vp8',
+  'video/webm;codecs=vp8,opus',
+];
 
 function parsePayload(raw: string | null) {
   try {
@@ -70,7 +77,7 @@ export async function POST(request: NextRequest) {
           const employeeId = String(payload?.employeeId || '').trim();
           if (!employeeId || !pathname.startsWith(`live-recordings/${employeeId}/`)) throw new Error('Invalid live recording upload path');
           return {
-            allowedContentTypes: ['video/webm', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus'],
+            allowedContentTypes: ALLOWED_WEBM_CONTENT_TYPES,
             maximumSizeInBytes: MAX_RECORDING_BYTES,
             addRandomSuffix: false,
             tokenPayload: JSON.stringify({ kind, employeeId, adminId: user.sub }),
@@ -81,7 +88,7 @@ export async function POST(request: NextRequest) {
           const expectedPrefix = `recordings/${user.sub}/`;
           if (!pathname.startsWith(expectedPrefix)) throw new Error('Invalid recording upload path');
           return {
-            allowedContentTypes: ['video/webm', 'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus'],
+            allowedContentTypes: ALLOWED_WEBM_CONTENT_TYPES,
             maximumSizeInBytes: MAX_RECORDING_BYTES,
             addRandomSuffix: false,
             tokenPayload: JSON.stringify({ kind, userId: user.sub }),

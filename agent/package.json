@@ -1,6 +1,6 @@
 {
   "name": "worktrack-agent",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "WorkTrack silent background agent — captures screenshots and tracks time",
   "main": "build/main.js",
   "scripts": {
