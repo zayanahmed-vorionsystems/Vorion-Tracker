@@ -22,6 +22,10 @@ function getUploadKind(pathname: string, rawPayload: string | null) {
   return '';
 }
 
+function logBlobUploadEvent(event: string, details: Record<string, unknown>) {
+  console.info(`[blob-upload] ${event}`, details);
+}
+
 export async function POST(request: NextRequest) {
   const user = requireAuth(request);
   if ('status' in user) return user;
@@ -39,6 +43,16 @@ export async function POST(request: NextRequest) {
       onBeforeGenerateToken: async (pathname, clientPayload) => {
         const kind = getUploadKind(pathname, clientPayload);
         const payload = parsePayload(clientPayload);
+        logBlobUploadEvent('token-request', {
+          route: '/api/blob/client-upload',
+          caller: kind || 'unknown',
+          pathname,
+          userId: user.sub,
+          localId: payload?.localId || null,
+          batchId: payload?.batchId || null,
+          attempt: payload?.attempt ?? null,
+          firstAttempt: payload?.firstAttempt ?? null,
+        });
 
         if (kind === 'screenshot') {
           const expectedPrefix = `screenshots/${user.sub}/`;
@@ -76,7 +90,13 @@ export async function POST(request: NextRequest) {
 
         throw new Error('Unsupported upload type');
       },
-      onUploadCompleted: async () => {
+      onUploadCompleted: async (payload) => {
+        logBlobUploadEvent('completed', {
+          route: '/api/blob/client-upload',
+          pathname: payload?.blob?.pathname,
+          url: payload?.blob?.url,
+          tokenPayload: payload?.tokenPayload || null,
+        });
         // Metadata is saved by the explicit commit routes after the client upload succeeds.
       },
     });

@@ -67,10 +67,26 @@ export async function POST(req: NextRequest) {
     const extension   = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
     const blobKey      = `screenshots/${user.sub}/${Date.now()}-${randomUUID()}.${extension}`;
 
+    console.info('[blob-upload] server-put-start', {
+      route: '/api/screenshots',
+      caller: 'screenshot-form-post',
+      pathname: blobKey,
+      userId: user.sub,
+      bytes: file.size,
+      attempt: 1,
+      firstAttempt: true,
+    });
     const blob = await put(blobKey, file, {
       access: 'public',
       contentType: file.type || 'image/png',
       addRandomSuffix: false,
+    });
+    console.info('[blob-upload] server-put-complete', {
+      route: '/api/screenshots',
+      caller: 'screenshot-form-post',
+      pathname: blob.pathname,
+      url: blob.url,
+      userId: user.sub,
     });
     const publicUrl = blob.url;
 

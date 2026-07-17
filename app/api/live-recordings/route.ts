@@ -11,6 +11,19 @@ function isAllowedRecordingType(type: string) {
   return normalized === 'video/webm' || normalized.startsWith('video/webm;codecs=');
 }
 
+function isVercelBlobUrl(rawUrl: string) {
+  try {
+    const url = new URL(rawUrl);
+    return url.protocol === 'https:' && (
+      url.hostname.endsWith('.blob.vercel-storage.com')
+      || url.hostname.endsWith('.public.blob.vercel-storage.com')
+      || url.hostname.endsWith('.vercel-storage.com')
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function canManageLiveRecording(user: any, employeeId: string) {
   if (!canAccessLiveMonitor(normalizeRole(user.role))) return false;
   const rows = await sql`
@@ -35,7 +48,7 @@ export async function POST(request: NextRequest) {
       if (!(await canManageLiveRecording(user, employeeId))) return err('Forbidden', 403);
 
       const fileUrl = String(body?.fileUrl || '');
-      if (!/^https:\/\/.+\.blob\.vercel-storage\.com\//i.test(fileUrl)) return err('Invalid recording URL.', 400);
+      if (!isVercelBlobUrl(fileUrl)) return err('Invalid recording URL.', 400);
 
       return ok({
         ok: true,
@@ -76,11 +89,29 @@ export async function POST(request: NextRequest) {
     }
 
     const fileName = `live-recordings/${employeeId || 'unknown'}/live-${Date.now()}.webm`;
+    console.info('[blob-upload] server-put-start', {
+      route: '/api/live-recordings',
+      caller: 'live-recording-form-post',
+      pathname: fileName,
+      userId: user.sub,
+      employeeId,
+      bytes: file.size,
+      attempt: 1,
+      firstAttempt: true,
+    });
     const blob = await put(fileName, file, {
       access: 'public',
       contentType: file.type || 'video/webm',
       addRandomSuffix: false,
       multipart: true,
+    });
+    console.info('[blob-upload] server-put-complete', {
+      route: '/api/live-recordings',
+      caller: 'live-recording-form-post',
+      pathname: blob.pathname,
+      url: blob.url,
+      userId: user.sub,
+      employeeId,
     });
 
     return ok({

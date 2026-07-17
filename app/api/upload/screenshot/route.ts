@@ -42,10 +42,28 @@ export async function POST(req: NextRequest) {
 
     const finalExt = extension || 'png'; // file.type empty case, keep old default
     const blobKey = `screenshots/${employeeId}/${Date.now()}-${randomUUID()}.${finalExt}`;
+    console.info('[blob-upload] server-put-start', {
+      route: '/api/upload/screenshot',
+      caller: 'legacy-agent-screenshot-upload',
+      pathname: blobKey,
+      userId: employeeId,
+      deviceId,
+      bytes: file.size,
+      attempt: 1,
+      firstAttempt: true,
+    });
     const blob = await put(blobKey, file, {
       access: 'public',
       contentType: file.type || 'image/png',
       addRandomSuffix: false,
+    });
+    console.info('[blob-upload] server-put-complete', {
+      route: '/api/upload/screenshot',
+      caller: 'legacy-agent-screenshot-upload',
+      pathname: blob.pathname,
+      url: blob.url,
+      userId: employeeId,
+      deviceId,
     });
     const publicUrl = blob.url;
 

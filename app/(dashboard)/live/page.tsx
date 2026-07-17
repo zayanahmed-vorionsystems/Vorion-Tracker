@@ -316,7 +316,7 @@ export default function LiveMonitorPage() {
             multipart: true,
             handleUploadUrl: '/api/blob/client-upload',
             headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-            clientPayload: JSON.stringify({ kind: 'live-recording', employeeId }),
+            clientPayload: JSON.stringify({ kind: 'live-recording', employeeId, attempt: 1, firstAttempt: true }),
           });
           const response = await fetch('/api/live-recordings', {
             method: 'POST',

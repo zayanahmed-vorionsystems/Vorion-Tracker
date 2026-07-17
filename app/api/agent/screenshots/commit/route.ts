@@ -18,6 +18,25 @@ function isVercelBlobUrl(rawUrl: string) {
   }
 }
 
+function getVercelBlobPath(rawUrl: string) {
+  try {
+    if (!isVercelBlobUrl(rawUrl)) return '';
+    return decodeURIComponent(new URL(rawUrl).pathname.replace(/^\/+/, ''));
+  } catch {}
+  return '';
+}
+
+function getValidationError(shot: { path: string; url: string }, prefix: string) {
+  if (!shot.path) return 'missing path';
+  if (!shot.path.startsWith(prefix)) return `path outside employee prefix: ${shot.path}`;
+  if (!/\.(png|webp|jpg|jpeg)$/i.test(shot.path)) return `unsupported screenshot extension: ${shot.path}`;
+  if (!shot.url) return 'missing url';
+  if (!isVercelBlobUrl(shot.url)) return `unsupported screenshot url host: ${shot.url}`;
+  const urlPath = getVercelBlobPath(shot.url);
+  if (urlPath && urlPath !== shot.path) return `blob url path does not match metadata path: ${urlPath}`;
+  return '';
+}
+
 export async function POST(req: NextRequest) {
   if (!process.env.DATABASE_URL) return err('Server misconfigured: DATABASE_URL not set', 500);
   const user = requireAuth(req);
@@ -25,15 +44,34 @@ export async function POST(req: NextRequest) {
   try {
     const input = (await req.json())?.screenshots;
     if (!Array.isArray(input) || input.length < 1 || input.length > MAX_BATCH_SIZE) return err('screenshots must contain 1 to 30 items', 400);
-    const shots = input.map((item: any) => ({
-      path: String(item?.path || ''), url: String(item?.url || item?.fileUrl || item?.blobUrl || ''),
-      deviceId: item?.deviceId ? String(item.deviceId).slice(0, 200) : null,
-      activeApp: String(item?.activeApp || 'Unknown').slice(0, 500),
-      activityPct: Math.max(0, Math.min(100, Number.parseInt(String(item?.activityPct || 0), 10) || 0)),
-      capturedAt: new Date(item?.capturedAt || Date.now()).toISOString(), sessionId: item?.sessionId ? String(item.sessionId) : null,
-    }));
+    const shots = input.map((item: any) => {
+      const url = String(item?.url || item?.fileUrl || item?.blobUrl || '');
+      const path = String(item?.path || item?.pathname || getVercelBlobPath(url) || '');
+      return {
+        path, url,
+        localId: item?.localId ? String(item.localId).slice(0, 200) : null,
+        attempt: Number.isFinite(Number(item?.attempt)) ? Number(item.attempt) : null,
+        deviceId: item?.deviceId ? String(item.deviceId).slice(0, 200) : null,
+        activeApp: String(item?.activeApp || 'Unknown').slice(0, 500),
+        activityPct: Math.max(0, Math.min(100, Number.parseInt(String(item?.activityPct || 0), 10) || 0)),
+        capturedAt: new Date(item?.capturedAt || Date.now()).toISOString(), sessionId: item?.sessionId ? String(item.sessionId) : null,
+      };
+    });
     const prefix = `screenshots/${user.sub}/`;
-    if (shots.some((shot) => !shot.path.startsWith(prefix) || !/\.(png|webp|jpg|jpeg)$/i.test(shot.path) || !isVercelBlobUrl(shot.url))) return err('Invalid screenshot blob', 400);
+    const validationErrors = shots.map((shot, index) => ({ index, error: getValidationError(shot, prefix), path: shot.path, url: shot.url })).filter((item) => item.error);
+    if (validationErrors.length) {
+      console.error('POST /api/agent/screenshots/commit validation failed:', validationErrors);
+      return err('Invalid screenshot blob', 400);
+    }
+    console.info('POST /api/agent/screenshots/commit accepted batch', {
+      employeeId: user.sub,
+      count: shots.length,
+      screenshots: shots.map((shot) => ({
+        localId: shot.localId,
+        attempt: shot.attempt,
+        path: shot.path,
+      })),
+    });
     const availableColumns = await getExistingColumns('screenshots', ['blob_url', 'file_url', 'device_id']);
     const saved = await withTransaction(async (client) => {
       const urlColumns = ['blob_url', 'file_url'].filter((column) => availableColumns.has(column));

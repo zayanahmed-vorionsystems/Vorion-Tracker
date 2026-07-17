@@ -90,7 +90,7 @@ function setupFileLogging() {
     const portableExecutableDir = process.env.PORTABLE_EXECUTABLE_DIR || '';
     const executableDir = process.execPath ? path.dirname(process.execPath) : '';
     const cwd = process.cwd();
-    const logDir = portableExecutableDir || executableDir || cwd;
+    const logDir = app.isPackaged ? (portableExecutableDir || executableDir || cwd) : cwd;
     if (!logDir) return;
 
     const logPath = path.join(logDir, 'agent-debug.log');
@@ -295,16 +295,20 @@ let lastPolicyPushAt = 0;
 // imageBuf/imageExt/imageMime hold whatever format survived compression
 // (WebP normally, PNG as a fallback) so the upload step stays format-agnostic.
 type PendingScreenshot = {
-  imageBuf: Buffer;
-  imageExt: 'webp' | 'png';
-  imageMime: string;
+  localId: string;
+  imageBuf?: Buffer;
+  imageExt?: 'webp' | 'png';
+  imageMime?: string;
+  upload?: BlobScreenshotUpload;
   activeApp: string;
   activityPct: number;
   capturedAt: string;
   sessionId: string | null;
   attempts: number;
+  nextRetryAt?: number;
 };
 const MAX_UPLOAD_ATTEMPTS = 3;
+const SCREENSHOT_RETRY_BASE_DELAY_MS = 30_000;
 let screenshotQueue: PendingScreenshot[] = [];
 let screenshotFlushTimer: NodeJS.Timeout | null = null;
 let screenshotFlushInFlight = false;
@@ -527,6 +531,7 @@ async function uploadScreenshotFile(shot: PendingScreenshot) {
   }
 
   const form = new FormData();
+  if (!shot.imageBuf || !shot.imageExt || !shot.imageMime) return;
   const file = new File([new Uint8Array(shot.imageBuf)], `screenshot-${Date.now()}.${shot.imageExt}`, { type: shot.imageMime });
   form.append('file', file);
   form.append('employeeId', employeeId);
@@ -541,13 +546,41 @@ async function uploadScreenshotFile(shot: PendingScreenshot) {
 
 // ─── Alerts ────────────────────────────────────────────────────────────────
 async function uploadScreenshotToBlob(shot: PendingScreenshot): Promise<BlobScreenshotUpload> {
-  const pathname = `screenshots/${employeeId}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${shot.imageExt}`;
+  if (shot.upload) {
+    console.log('[SCREENSHOTS] Skipping Blob upload; retrying commit only', {
+      localId: shot.localId,
+      attempt: shot.attempts + 1,
+      path: shot.upload.path,
+    });
+    return shot.upload;
+  }
+  if (!shot.imageBuf || !shot.imageExt || !shot.imageMime) {
+    throw new Error('Screenshot has no image bytes or prior Blob upload to commit');
+  }
+  const pathname = `screenshots/${employeeId}/${shot.localId}.${shot.imageExt}`;
+  console.log('[SCREENSHOTS] Starting Blob upload', {
+    localId: shot.localId,
+    attempt: shot.attempts + 1,
+    firstAttempt: shot.attempts === 0,
+    pathname,
+    bytes: shot.imageBuf.length,
+  });
   const blob = await uploadBlob(pathname, shot.imageBuf, {
     access: 'public',
     contentType: shot.imageMime,
     handleUploadUrl: new URL('/api/blob/client-upload', SERVER_URL).toString(),
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    clientPayload: JSON.stringify({ kind: 'screenshot' }),
+    clientPayload: JSON.stringify({
+      kind: 'screenshot',
+      localId: shot.localId,
+      attempt: shot.attempts + 1,
+      firstAttempt: shot.attempts === 0,
+    }),
+  });
+  console.log('[SCREENSHOTS] Blob upload succeeded', {
+    localId: shot.localId,
+    attempt: shot.attempts + 1,
+    pathname: blob.pathname,
   });
 
   return {
@@ -556,6 +589,23 @@ async function uploadScreenshotToBlob(shot: PendingScreenshot): Promise<BlobScre
     downloadUrl: blob.downloadUrl,
     contentType: blob.contentType,
   };
+}
+
+async function commitUploadedScreenshots(committed: Array<{ shot: PendingScreenshot; upload: BlobScreenshotUpload }>) {
+  if (!committed.length) return;
+  await apiRequest('POST', '/api/agent/screenshots/commit', {
+    screenshots: committed.map(({ shot, upload }) => ({
+      path: upload.path,
+      url: upload.url,
+      deviceId: agentId,
+      localId: shot.localId,
+      attempt: shot.attempts + 1,
+      activeApp: shot.activeApp,
+      activityPct: shot.activityPct,
+      capturedAt: shot.capturedAt,
+      sessionId: shot.sessionId,
+    })),
+  });
 }
 
 async function uploadScreenshotBatch(batch: PendingScreenshot[]) {
@@ -573,25 +623,18 @@ async function uploadScreenshotBatch(batch: PendingScreenshot[]) {
 
   uploadResults.forEach((result, index) => {
     if (result.status === 'fulfilled') committed.push({ shot: batch[index], upload: result.value });
-    else failed.push(batch[index]);
+    else {
+      console.error('[SCREENSHOTS] Blob upload failed:', result.reason?.message || result.reason);
+      failed.push(batch[index]);
+    }
   });
 
   if (committed.length) {
     try {
-      await apiRequest('POST', '/api/agent/screenshots/commit', {
-        screenshots: committed.map(({ shot, upload }) => ({
-          path: upload.path,
-          url: upload.url,
-          deviceId: agentId,
-          activeApp: shot.activeApp,
-          activityPct: shot.activityPct,
-          capturedAt: shot.capturedAt,
-          sessionId: shot.sessionId,
-        })),
-      });
+      await commitUploadedScreenshots(committed);
     } catch (error) {
-      failed.push(...committed.map(({ shot }) => shot));
-      throw error;
+      console.error('[SCREENSHOTS] Commit failed after Blob upload; retrying metadata only:', error);
+      failed.push(...committed.map(({ shot, upload }) => ({ ...shot, upload, imageBuf: undefined, imageExt: undefined, imageMime: undefined })));
     }
   }
 
@@ -1203,7 +1246,17 @@ async function captureAndUpload() {
       savingsPct: pngBuf.length ? Math.round((1 - imageBuf.length / pngBuf.length) * 100) : 0,
     });
 
-    screenshotQueue.push({ imageBuf, imageExt, imageMime, activeApp, activityPct: actPct, capturedAt, sessionId: sessionId || null, attempts: 0 });
+    screenshotQueue.push({
+      localId: `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      imageBuf,
+      imageExt,
+      imageMime,
+      activeApp,
+      activityPct: actPct,
+      capturedAt,
+      sessionId: sessionId || null,
+      attempts: 0,
+    });
     // NOTE: no scheduleScreenshotFlush() here anymore — the fixed 30s
     // uploadInterval owns the batch upload cadence now.
   } catch(e) { console.error('Capture error:',e); }
@@ -1227,7 +1280,8 @@ async function startTracking() {
   scanInterval       = setInterval(() => { void scanBlockedApps(); void scanBlockedWebsites(); }, 2000);
   policySyncInterval = setInterval(() => { void syncPolicies(); }, 5 * 60 * 1000);
 
-  void captureAndUpload();
+  await captureAndUpload();
+  void flushScreenshotQueue();
   void sendHeartbeat();
   void syncPolicies();
   connectPolicyRealtime();
@@ -1293,31 +1347,65 @@ function scheduleScreenshotFlush() {
   }, 60_000);
 }
 
+function getScreenshotRetryDelayMs(attempt: number) {
+  return SCREENSHOT_RETRY_BASE_DELAY_MS * Math.pow(2, Math.max(0, attempt - 1));
+}
+
+function dequeueEligibleScreenshots(limit: number) {
+  const now = Date.now();
+  const batch: PendingScreenshot[] = [];
+  for (let index = 0; index < screenshotQueue.length && batch.length < limit;) {
+    const shot = screenshotQueue[index];
+    if (shot.nextRetryAt && shot.nextRetryAt > now) {
+      index += 1;
+      continue;
+    }
+    batch.push(shot);
+    screenshotQueue.splice(index, 1);
+  }
+  return batch;
+}
+
 // Flushes the local queue by uploading screenshots directly to Vercel Blob,
 // then POSTing only metadata to our backend.
 async function flushScreenshotQueue() {
   if (screenshotFlushInFlight || !screenshotQueue.length || !token) return;
   screenshotFlushInFlight = true;
-  const batch = screenshotQueue.splice(0, 10);
+  const batch = dequeueEligibleScreenshots(10);
+  if (!batch.length) {
+    screenshotFlushInFlight = false;
+    return;
+  }
   try {
     const failed = await uploadScreenshotBatch(batch);
     for (const shot of failed) {
       const nextAttempts = shot.attempts + 1;
       if (nextAttempts < MAX_UPLOAD_ATTEMPTS) {
-        console.warn(`[SCREENSHOTS] Upload failed (attempt ${nextAttempts}/${MAX_UPLOAD_ATTEMPTS}), will retry next flush`);
-        screenshotQueue.push({ ...shot, attempts: nextAttempts });
+        const retryDelayMs = getScreenshotRetryDelayMs(nextAttempts);
+        console.warn(`[SCREENSHOTS] Upload/commit failed (attempt ${nextAttempts}/${MAX_UPLOAD_ATTEMPTS}), retrying in ${Math.round(retryDelayMs / 1000)}s`);
+        screenshotQueue.push({ ...shot, attempts: nextAttempts, nextRetryAt: Date.now() + retryDelayMs });
       } else {
-        console.error(`[SCREENSHOTS] Upload failed ${MAX_UPLOAD_ATTEMPTS} times, dropping screenshot`);
+        console.error('[SCREENSHOTS] Upload/commit failed max attempts, dropping screenshot batch item', {
+          capturedAt: shot.capturedAt,
+          activeApp: shot.activeApp,
+          hasBlobUpload: Boolean(shot.upload),
+        });
       }
     }
   } catch (error: any) {
     for (const shot of batch) {
       const nextAttempts = shot.attempts + 1;
       if (nextAttempts < MAX_UPLOAD_ATTEMPTS) {
-        console.warn(`[SCREENSHOTS] Batch upload failed (attempt ${nextAttempts}/${MAX_UPLOAD_ATTEMPTS}), will retry next flush:`, error?.message || error);
-        screenshotQueue.push({ ...shot, attempts: nextAttempts });
+        const retryDelayMs = getScreenshotRetryDelayMs(nextAttempts);
+        console.warn(`[SCREENSHOTS] Batch upload/commit failed (attempt ${nextAttempts}/${MAX_UPLOAD_ATTEMPTS}), retrying in ${Math.round(retryDelayMs / 1000)}s:`, error?.message || error);
+        screenshotQueue.push({ ...shot, attempts: nextAttempts, nextRetryAt: Date.now() + retryDelayMs });
       } else {
-        console.error(`[SCREENSHOTS] Batch upload failed ${MAX_UPLOAD_ATTEMPTS} times, dropping screenshot:`, error?.message || error);
+        console.error('[SCREENSHOTS] Batch upload/commit failed max attempts, dropping screenshot batch item', {
+          capturedAt: shot.capturedAt,
+          activeApp: shot.activeApp,
+          hasBlobUpload: Boolean(shot.upload),
+          error: error?.message || error,
+        });
       }
     }
   } finally {

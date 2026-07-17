@@ -33,11 +33,27 @@ export async function POST(req: NextRequest) {
   }
 
   const filePath    = `recordings/${user.sub}/${Date.now()}.webm`;
+  console.info('[blob-upload] server-put-start', {
+    route: '/api/recordings',
+    caller: 'recording-form-post',
+    pathname: filePath,
+    userId: user.sub,
+    bytes: file.size,
+    attempt: 1,
+    firstAttempt: true,
+  });
   const blob = await put(filePath, file, {
     access: 'public',
     contentType: file.type || 'video/webm',
     addRandomSuffix: false,
     multipart: true,
+  });
+  console.info('[blob-upload] server-put-complete', {
+    route: '/api/recordings',
+    caller: 'recording-form-post',
+    pathname: blob.pathname,
+    url: blob.url,
+    userId: user.sub,
   });
   const publicUrl = blob.url;
 
