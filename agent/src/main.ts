@@ -12,6 +12,8 @@ import https from 'https';
 import http from 'http';
 import sharp from 'sharp';
 import { createClient } from '@supabase/supabase-js';
+import log from 'electron-log/main';
+import { autoUpdater } from 'electron-updater';
 import { EMBEDDED_ENV } from './embedded-config';
 
 function getAncestorEnvCandidates(baseDir: string) {
@@ -156,6 +158,12 @@ import { syncProxyBlock, removeProxyBlock } from './websiteBlock';
 
 // ─── Config ────────────────────────────────────────────────────────────────
 const isDev = !app.isPackaged;
+const UPDATE_RELEASE_OWNER = 'VorionDevTeam';
+// Public GitHub Releases repository that hosts latest.yml, the installer, and blockmap.
+const UPDATE_RELEASE_REPO = 'tracker-download';
+const AUTO_UPDATE_INITIAL_DELAY_MS = 15_000;
+const AUTO_UPDATE_INTERVAL_MS = 4 * 60 * 60 * 1000;
+const UPDATE_INSTALL_CLEANUP_TIMEOUT_MS = 45_000;
 const configuredServerUrl = process.env.WORKTRACK_SERVER || process.env.NEXT_PUBLIC_APP_URL || EMBEDDED_ENV.WORKTRACK_SERVER || EMBEDDED_ENV.NEXT_PUBLIC_APP_URL || '';
 const fallbackServerUrl = isDev ? 'http://127.0.0.1:3000/' : 'https://tracker.vorionsystems.com/';
 const SERVER_URL = (() => {
@@ -299,6 +307,11 @@ const MAX_UPLOAD_ATTEMPTS = 3;
 let screenshotQueue: PendingScreenshot[] = [];
 let screenshotFlushTimer: NodeJS.Timeout | null = null;
 let screenshotFlushInFlight = false;
+let updaterCheckInFlight = false;
+let updaterDownloaded = false;
+let updaterDownloadedVersion = '';
+let updaterSchedulerStarted = false;
+let updaterInterval: NodeJS.Timeout | null = null;
 // tracks which blocked domains we've already reported recently, to avoid spamming events
 const recentlyReportedDomains = new Map<string, number>();
 // tracks recently handled blocked processes, so repeated scans don't reopen the same warning dialog
@@ -325,6 +338,8 @@ async function requestGracefulQuit() {
     } catch (error) {
       console.error('[QUIT] graceful shutdown failed:', error);
     } finally {
+      if (updaterInterval) clearInterval(updaterInterval);
+      updaterInterval = null;
       removeProxyBlock();
       tray?.destroy();
       tray = null;
@@ -405,6 +420,12 @@ async function apiFormRequest(path:string, form:any) {
   if (!res.ok) throw new HttpError(parsed?.error || `Request failed ${res.status}`, res.status);
   return parsed;
 }
+
+type SignedScreenshotUpload = {
+  path: string;
+  signedUrl: string;
+  contentType?: string;
+};
 
 async function sessionAction(action:string, payload: Record<string, any> = {}) {
   if (!token) throw new Error('Not authenticated');
@@ -513,10 +534,75 @@ async function uploadScreenshotFile(shot: PendingScreenshot) {
   form.append('capturedAt', shot.capturedAt);
   if (shot.sessionId) form.append('sessionId', shot.sessionId);
 
-  await apiFormRequest('/api/upload/screenshot', form);
+  throw new Error('Legacy screenshot upload is disabled; use signed storage uploads.');
 }
 
 // ─── Alerts ────────────────────────────────────────────────────────────────
+async function uploadToSignedStorageUrl(upload: SignedScreenshotUpload, shot: PendingScreenshot) {
+  const res = await fetch(upload.signedUrl, {
+    method: 'PUT',
+    headers: {
+      'cache-control': 'max-age=3600',
+      'content-type': shot.imageMime,
+      'x-upsert': 'false',
+    },
+    body: shot.imageBuf as any,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new HttpError(text || `Signed upload failed ${res.status}`, res.status);
+  }
+}
+
+async function uploadScreenshotBatch(batch: PendingScreenshot[]) {
+  if (!token || !batch.length) return [];
+  if (!employeeId) {
+    console.warn('[SCREENSHOTS] Skipping upload - no employeeId in session yet');
+    return batch;
+  }
+
+  const prepare = await apiRequest('POST', '/api/agent/screenshots/upload-urls', {
+    screenshots: batch.map((shot) => ({
+      contentType: shot.imageMime,
+      ext: shot.imageExt,
+    })),
+  });
+  const uploads = Array.isArray(prepare?.uploads) ? prepare.uploads as SignedScreenshotUpload[] : [];
+  if (uploads.length !== batch.length) throw new Error('Upload URL count did not match screenshot batch');
+
+  const uploadResults = await Promise.allSettled(
+    batch.map((shot, index) => uploadToSignedStorageUrl(uploads[index], shot)),
+  );
+  const committed: Array<{ shot: PendingScreenshot; upload: SignedScreenshotUpload }> = [];
+  const failed: PendingScreenshot[] = [];
+
+  uploadResults.forEach((result, index) => {
+    if (result.status === 'fulfilled') committed.push({ shot: batch[index], upload: uploads[index] });
+    else failed.push(batch[index]);
+  });
+
+  if (committed.length) {
+    try {
+      await apiRequest('POST', '/api/agent/screenshots/commit', {
+        screenshots: committed.map(({ shot, upload }) => ({
+          path: upload.path,
+          deviceId: agentId,
+          activeApp: shot.activeApp,
+          activityPct: shot.activityPct,
+          capturedAt: shot.capturedAt,
+          sessionId: shot.sessionId,
+        })),
+      });
+    } catch (error) {
+      failed.push(...committed.map(({ shot }) => shot));
+      throw error;
+    }
+  }
+
+  return failed;
+}
+
 function getStoredAlerts(): any[] { return get('alerts') || []; }
 function setStoredAlerts(alerts: any[]) { set('alerts', alerts); }
 
@@ -862,6 +948,225 @@ function getFriendlyRequestError(err: any) {
   return `Unable to reach ${SERVER_URL}. Confirm the deployed domain is online and accessible from this device.`;
 }
 
+function sendUpdaterEvent(channel: string, payload: Record<string, any> = {}) {
+  mainWindow?.webContents.send(channel, payload);
+}
+
+function getUpdaterStatus() {
+  return {
+    currentVersion: app.getVersion(),
+    isPackaged: app.isPackaged,
+    releaseOwner: UPDATE_RELEASE_OWNER,
+    releaseRepo: UPDATE_RELEASE_REPO,
+    checking: updaterCheckInFlight,
+    downloaded: updaterDownloaded,
+    downloadedVersion: updaterDownloadedVersion,
+  };
+}
+
+function getUpdaterErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || 'Unknown update error');
+  if (/latest\.yml/i.test(message)) return 'The release is missing latest.yml. Upload the Electron Builder release assets and try again.';
+  if (/sha512|checksum|hash|corrupt/i.test(message)) return 'The downloaded update could not be verified. Please publish the installer and blockmap again.';
+  if (/ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|network|internet/i.test(message)) return 'Unable to check for updates. Check your internet connection and try again.';
+  if (/404|Not Found/i.test(message)) return 'The update release or one of its files was not found on GitHub.';
+  return message;
+}
+
+function setupAutoUpdater() {
+  log.initialize();
+  log.transports.file.level = 'info';
+  autoUpdater.logger = log;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: UPDATE_RELEASE_OWNER,
+    repo: UPDATE_RELEASE_REPO,
+    private: false,
+    releaseType: 'release',
+  } as any);
+
+  autoUpdater.on('checking-for-update', () => {
+    updaterCheckInFlight = true;
+    log.info('[UPDATER] checking for updates', { currentVersion: app.getVersion(), repo: `${UPDATE_RELEASE_OWNER}/${UPDATE_RELEASE_REPO}` });
+    sendUpdaterEvent('updater:checking', getUpdaterStatus());
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    updaterCheckInFlight = false;
+    log.info('[UPDATER] update available', { currentVersion: app.getVersion(), availableVersion: info.version });
+    sendUpdaterEvent('updater:available', { ...getUpdaterStatus(), version: info.version });
+  });
+
+  autoUpdater.on('update-not-available', (info) => {
+    updaterCheckInFlight = false;
+    log.info('[UPDATER] update not available', { currentVersion: app.getVersion(), latestVersion: info.version });
+    sendUpdaterEvent('updater:not-available', { ...getUpdaterStatus(), version: info.version });
+  });
+
+  autoUpdater.on('download-progress', (progress) => {
+    log.info('[UPDATER] download progress', { percent: Math.round(progress.percent), transferred: progress.transferred, total: progress.total });
+    sendUpdaterEvent('updater:progress', { ...getUpdaterStatus(), percent: progress.percent });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    updaterCheckInFlight = false;
+    updaterDownloaded = true;
+    updaterDownloadedVersion = info.version;
+    log.info('[UPDATER] update downloaded', { version: info.version });
+    sendUpdaterEvent('updater:downloaded', { ...getUpdaterStatus(), version: info.version });
+    void promptForDownloadedUpdate(info.version);
+  });
+
+  autoUpdater.on('error', (error) => {
+    updaterCheckInFlight = false;
+    const message = getUpdaterErrorMessage(error);
+    log.error('[UPDATER] error', message);
+    sendUpdaterEvent('updater:error', { ...getUpdaterStatus(), message });
+  });
+}
+
+async function checkForUpdates(manual: boolean) {
+  if (!app.isPackaged) {
+    const message = 'Updates are only available in packaged builds.';
+    log.info('[UPDATER] skipped update check in development', { manual });
+    sendUpdaterEvent('updater:error', { ...getUpdaterStatus(), message });
+    return { ok: false, error: message };
+  }
+
+  if (updaterCheckInFlight) {
+    const message = 'An update check is already in progress.';
+    sendUpdaterEvent('updater:error', { ...getUpdaterStatus(), message });
+    return { ok: false, error: message };
+  }
+
+  if (updaterDownloaded) {
+    sendUpdaterEvent('updater:downloaded', { ...getUpdaterStatus(), version: updaterDownloadedVersion });
+    return { ok: true, downloaded: true };
+  }
+
+  updaterCheckInFlight = true;
+  try {
+    await autoUpdater.checkForUpdates();
+    return { ok: true };
+  } catch (error) {
+    updaterCheckInFlight = false;
+    const message = getUpdaterErrorMessage(error);
+    log.error('[UPDATER] check failed', message);
+    sendUpdaterEvent('updater:error', { ...getUpdaterStatus(), message });
+    return { ok: false, error: message };
+  }
+}
+
+function startAutoUpdateScheduler() {
+  if (!app.isPackaged || updaterSchedulerStarted) return;
+  updaterSchedulerStarted = true;
+  setTimeout(() => { void checkForUpdates(false); }, AUTO_UPDATE_INITIAL_DELAY_MS);
+  updaterInterval = setInterval(() => { void checkForUpdates(false); }, AUTO_UPDATE_INTERVAL_MS);
+  log.info('[UPDATER] automatic update scheduler started', {
+    initialDelayMs: AUTO_UPDATE_INITIAL_DELAY_MS,
+    intervalMs: AUTO_UPDATE_INTERVAL_MS,
+  });
+}
+
+async function waitForCondition(condition: () => boolean, timeoutMs: number, intervalMs = 250) {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return true;
+}
+
+async function cleanupBeforeUpdateInstall() {
+  log.info('[UPDATER] cleanup before restart started', { tracking, queueLength: screenshotQueue.length, sessionId: Boolean(sessionId) });
+  const deadline = Date.now() + UPDATE_INSTALL_CLEANUP_TIMEOUT_MS;
+
+  tracking = false;
+  status = 'offline';
+  ssInterval = clearTimer(ssInterval);
+  uploadInterval = clearTimer(uploadInterval);
+  idleInterval = clearTimer(idleInterval);
+  heartbeatInterval = clearTimer(heartbeatInterval);
+  policyInterval = clearTimer(policyInterval);
+  scanInterval = clearTimer(scanInterval);
+  policySyncInterval = clearTimer(policySyncInterval);
+  if (screenshotFlushTimer) clearTimeout(screenshotFlushTimer);
+  screenshotFlushTimer = null;
+  disconnectPolicyRealtime();
+
+  await waitForCondition(() => !capturingScreenshot, Math.max(0, deadline - Date.now()));
+
+  while ((screenshotQueue.length > 0 || screenshotFlushInFlight) && Date.now() < deadline) {
+    if (!screenshotFlushInFlight && screenshotQueue.length > 0) {
+      await flushScreenshotQueue();
+      continue;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  if (screenshotQueue.length > 0 || screenshotFlushInFlight) {
+    log.warn('[UPDATER] cleanup timeout while waiting for screenshot uploads', {
+      queueLength: screenshotQueue.length,
+      uploadInFlight: screenshotFlushInFlight,
+    });
+  }
+
+  try {
+    if (sessionId) {
+      await endSession();
+    } else {
+      await teardownLiveWatch({ authToken: token, serverUrl: SERVER_URL, stopRoom: false });
+    }
+  } catch (error) {
+    log.error('[UPDATER] cleanup failed while ending session/live watch', getUpdaterErrorMessage(error));
+  }
+
+  updateTray();
+  mainWindow?.webContents.send('tracking-status', { tracking: false });
+  broadcastStatus();
+  log.info('[UPDATER] cleanup before restart finished', { queueLength: screenshotQueue.length });
+}
+
+async function installDownloadedUpdate() {
+  if (!updaterDownloaded) {
+    const message = 'No downloaded update is ready to install.';
+    sendUpdaterEvent('updater:error', { ...getUpdaterStatus(), message });
+    return { ok: false, error: message };
+  }
+
+  try {
+    await cleanupBeforeUpdateInstall();
+  } catch (error) {
+    log.error('[UPDATER] cleanup failed before install', getUpdaterErrorMessage(error));
+  }
+
+  allowImmediateQuit = true;
+  isQuitting = true;
+  autoUpdater.quitAndInstall(false, true);
+  return { ok: true };
+}
+
+async function promptForDownloadedUpdate(version: string) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const result = await dialog.showMessageBox(mainWindow, {
+    type: 'info',
+    title: 'Vorion Tracker Update',
+    message: `Version ${version} is ready to install.`,
+    buttons: ['Restart and Update', 'Later'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+
+  if (result.response === 0) {
+    await installDownloadedUpdate();
+  } else {
+    log.info('[UPDATER] user postponed update install', { version });
+  }
+}
+
 function getScreenshotTargetSize() {
   // Always capture screenshots at the fixed resolution requested by the user.
   return { width: 1280, height: 720 };
@@ -1001,19 +1306,26 @@ async function flushScreenshotQueue() {
   screenshotFlushInFlight = true;
   const batch = screenshotQueue.splice(0, 10);
   try {
-    await Promise.all(batch.map(async (shot) => {
-      try {
-        await uploadScreenshotFile(shot);
-      } catch (error: any) {
-        const nextAttempts = shot.attempts + 1;
-        if (nextAttempts < MAX_UPLOAD_ATTEMPTS) {
-          console.warn(`[SCREENSHOTS] Upload failed (attempt ${nextAttempts}/${MAX_UPLOAD_ATTEMPTS}), will retry next flush:`, error?.message || error);
-          screenshotQueue.push({ ...shot, attempts: nextAttempts });
-        } else {
-          console.error(`[SCREENSHOTS] Upload failed ${MAX_UPLOAD_ATTEMPTS} times, dropping screenshot:`, error?.message || error);
-        }
+    const failed = await uploadScreenshotBatch(batch);
+    for (const shot of failed) {
+      const nextAttempts = shot.attempts + 1;
+      if (nextAttempts < MAX_UPLOAD_ATTEMPTS) {
+        console.warn(`[SCREENSHOTS] Upload failed (attempt ${nextAttempts}/${MAX_UPLOAD_ATTEMPTS}), will retry next flush`);
+        screenshotQueue.push({ ...shot, attempts: nextAttempts });
+      } else {
+        console.error(`[SCREENSHOTS] Upload failed ${MAX_UPLOAD_ATTEMPTS} times, dropping screenshot`);
       }
-    }));
+    }
+  } catch (error: any) {
+    for (const shot of batch) {
+      const nextAttempts = shot.attempts + 1;
+      if (nextAttempts < MAX_UPLOAD_ATTEMPTS) {
+        console.warn(`[SCREENSHOTS] Batch upload failed (attempt ${nextAttempts}/${MAX_UPLOAD_ATTEMPTS}), will retry next flush:`, error?.message || error);
+        screenshotQueue.push({ ...shot, attempts: nextAttempts });
+      } else {
+        console.error(`[SCREENSHOTS] Batch upload failed ${MAX_UPLOAD_ATTEMPTS} times, dropping screenshot:`, error?.message || error);
+      }
+    }
   } finally {
     screenshotFlushInFlight = false;
     // NOTE: no self-rescheduling here — uploadInterval already fires every
@@ -1031,6 +1343,7 @@ function updateTray() {
     { label: tracking ? 'Stop tracking' : 'Start tracking', click:()=> tracking?stopTracking():startTracking() },
     { label: 'Open window', click:()=>mainWindow?.show() },
     { label: 'Open dashboard in browser', click:()=>shell.openExternal(SERVER_URL) },
+    { label: 'Check for Updates', click:()=>{ mainWindow?.show(); void checkForUpdates(true); } },
     { type:'separator' },
     { label: 'Quit', click:()=>{ void requestGracefulQuit(); } },
   ]));
@@ -1193,6 +1506,9 @@ ipcMain.handle('logout', async (event) => {
   return { ok:true };
 });
 ipcMain.handle('get-status',       (event) => { assertMainRenderer(event); return { tracking, status, sessionId, userName, captureIntervalSec, idleSec: powerMonitor.getSystemIdleTime(), startedAt: status !== 'offline' ? Date.now() : null }; });
+ipcMain.handle('updater:status',   (event) => { assertMainRenderer(event); return getUpdaterStatus(); });
+ipcMain.handle('updater:check',    async (event) => { assertMainRenderer(event); return checkForUpdates(true); });
+ipcMain.handle('updater:install',  async (event) => { assertMainRenderer(event); return installDownloadedUpdate(); });
 ipcMain.handle('get-alerts',       async (event) => { assertMainRenderer(event); return getStoredAlerts(); });
 ipcMain.handle('sync-alerts',      async (event) => { assertMainRenderer(event); return syncAlertsWithServer(); });
 ipcMain.handle('mark-alert-read',  async (event, id:string) => { assertMainRenderer(event); return markAlertRead(id); });
@@ -1237,6 +1553,7 @@ ipcMain.handle('checkout', async (event) => {
 app.commandLine.appendSwitch('disable-features', 'DesktopCaptureUseDxgi,SpareRendererForSitePerProcess,CalculateNativeWinOcclusion');
 // ─── Boot ────────────────────────────────────────────────────────────────────
 app.whenReady().then(async ()=>{
+  setupAutoUpdater();
   await createWindow();
   const iconPath = path.join(
     isDev ? path.join(__dirname,'../assets') : process.resourcesPath,
@@ -1280,6 +1597,7 @@ app.whenReady().then(async ()=>{
   } else {
     mainWindow?.webContents.send('status-changed', { status: 'offline' });
   }
+  startAutoUpdateScheduler();
 });
 
 app.on('window-all-closed', () => {
