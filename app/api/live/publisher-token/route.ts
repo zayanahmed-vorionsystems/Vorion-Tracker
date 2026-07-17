@@ -30,13 +30,13 @@ export async function POST(req: NextRequest) {
   try {
     await ensureLiveKitRoom(roomName);
     const token = await createLiveKitToken({
-      identity: `employee-${user.sub}`,
-      roomName,
-      canPublish: true,
-      canSubscribe: false,
-      metadata: JSON.stringify({ employeeId: user.sub, sessionId: attendance.id, role: user.role }),
-      name: user.name,
-    });
+  identity: `employee-${user.sub}-${attendance.id}`,   // was: `employee-${user.sub}`
+  roomName,
+  canPublish: true,
+  canSubscribe: false,
+  metadata: JSON.stringify({ employeeId: user.sub, sessionId: attendance.id, role: user.role }),
+  name: user.name,
+});
 
     return ok({
       ...token,

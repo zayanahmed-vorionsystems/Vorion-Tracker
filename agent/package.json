@@ -6,14 +6,15 @@
   "scripts": {
     "generate:embedded-config": "node scripts/generate-embedded-config.cjs",
     "generate:app-icon": "node scripts/generate-app-icon.cjs",
-    "dev": "concurrently \"vite\" \"tsc -p tsconfig.electron.json --watch\" \"esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=build/capture-renderer.js --watch\" \"node scripts/copy-electron-assets.cjs\" \"wait-on http://localhost:5174 && wait-on build/main.js && electron .\"",
-    "build": "node scripts/clean-release.cjs && npm run generate:embedded-config && npm run generate:app-icon && vite build && tsc -p tsconfig.electron.json && esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=build/capture-renderer.js && esbuild src/capture-preload.ts --bundle --platform=node --external:electron --format=cjs --outfile=build/capture-preload.js && node scripts/copy-electron-assets.cjs && node scripts/run-electron-builder.cjs",
+    "dev": "node scripts/generate-embedded-config.cjs && concurrently \"vite\" \"tsc -p tsconfig.electron.json --watch\" \"esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=build/capture-renderer.js --watch\" \"esbuild src/recordingrenderer.ts --bundle --platform=browser --format=iife --outfile=build/recording-renderer.js --watch\" \"esbuild src/recordingpreload.ts --bundle --platform=node --external:electron --format=cjs --outfile=build/recording-preload.js --watch\" \"esbuild src/capture-preload.ts --bundle --platform=node --external:electron --format=cjs --outfile=build/capture-preload.js --watch\" \"node scripts/copy-electron-assets.cjs\" \"wait-on http://localhost:5174 build/main.js build/capture-renderer.js build/recording-renderer.js build/recording-preload.js build/capture-preload.js && electron .\"",
+    "build": "node scripts/clean-release.cjs && npm run generate:embedded-config && npm run generate:app-icon && vite build && tsc -p tsconfig.electron.json && esbuild src/capture-renderer.ts --bundle --platform=browser --format=iife --outfile=build/capture-renderer.js && esbuild src/capture-preload.ts --bundle --platform=node --external:electron --format=cjs --outfile=build/capture-preload.js && esbuild src/recordingrenderer.ts --bundle --platform=browser --format=iife --outfile=build/recording-renderer.js && esbuild src/recordingpreload.ts --bundle --platform=node --external:electron --format=cjs --outfile=build/recording-preload.js && node scripts/copy-electron-assets.cjs && node scripts/run-electron-builder.cjs",
     "pack": "node scripts/clean-release.cjs && npm run generate:embedded-config && npm run generate:app-icon && electron-builder --dir",
     "restore-electron": "node restore-electron.js"
   },
   "postinstall": "npm run restore-electron",
   "dependencies": {
     "@supabase/supabase-js": "^2.110.5",
+    "active-win": "^8.2.1",
     "axios": "^1.6.8",
     "dotenv": "^17.4.2",
     "electron-store": "^8.1.0",
@@ -48,10 +49,7 @@
     "extraMetadata": {
       "main": "build/main.js"
     },
-    "files": [
-      "build/**/*",
-      "src/capture.html"
-    ],
+    "files": ["build/**/*", "src/capture.html", "src/record.html"],
     "win": {
       "icon": "assets/icon.ico",
       "target": [

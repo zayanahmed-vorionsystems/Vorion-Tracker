@@ -1,8 +1,21 @@
 import { LocalVideoTrack, Room, RoomEvent, Track } from 'livekit-client';
 
+type LivePublisher = {
+  onStart: (callback: (payload: PublisherStartPayload) => void) => void;
+  onStop: (callback: () => void) => void;
+  sendReady: () => void;
+  log?: (payload: Record<string, unknown>) => void;
+};
+
+declare global {
+  interface Window {
+    livePublisher?: LivePublisher;
+  }
+}
+
 const globalScope = window as Window & typeof globalThis & {
   __worktrackCaptureRendererInitialized?: boolean;
-  __worktrackLivePublisher?: Window['livePublisher'];
+  __worktrackLivePublisher?: LivePublisher;
 };
 
 type PublisherStartPayload = {
@@ -21,7 +34,7 @@ let desiredConfig: PublisherStartPayload | null = null;
 
 function log(payload: Record<string, unknown>) {
   try {
-    globalScope.__worktrackLivePublisher?.log(payload);
+    globalScope.__worktrackLivePublisher?.log?.(payload);
   } catch {
     console.log('[AGENT][LIVEKIT]', payload);
   }

@@ -37,8 +37,7 @@ function normalizeAlertRow(row: any, columns: Set<string>) {
       status: row.status ?? 'open',
       metadata: row.metadata ?? {},
       is_read: Boolean(inferredReadState ?? false),
-      created_at: row.created_at ?? row.sent_at,
-      sent_at: row.sent_at ?? row.created_at,
+      created_at: row.created_at,
     };
   }
 
@@ -180,25 +179,25 @@ export async function GET(req: NextRequest) {
 
   let alerts: any[];
 
-  if (hasModernSchema) {
+ if (hasModernSchema) {
     if (hasIsReadColumn) {
       alerts = await sql`
-        SELECT id, employee_id, alert_type, title, description, severity, status, metadata, is_read, created_at, sent_at
+        SELECT id, employee_id, alert_type, title, description, severity, status, metadata, is_read, created_at
         FROM alerts
         WHERE employee_id = ${user.sub}
-        ORDER BY COALESCE(sent_at, created_at, NOW()) DESC
+        ORDER BY created_at DESC
         LIMIT 20
       `;
     } else {
       alerts = await sql`
-        SELECT id, employee_id, alert_type, title, description, severity, status, metadata, created_at, sent_at
+        SELECT id, employee_id, alert_type, title, description, severity, status, metadata, created_at
         FROM alerts
         WHERE employee_id = ${user.sub}
-        ORDER BY COALESCE(sent_at, created_at, NOW()) DESC
+        ORDER BY created_at DESC
         LIMIT 20
       `;
     }
-  } else {
+  } else  {
     alerts = await sql`
       SELECT id, from_user_id, to_user_id, message, is_read, sent_at, created_at
       FROM alerts

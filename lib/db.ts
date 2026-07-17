@@ -16,7 +16,29 @@ let pool: Pool | null = null;
 
 if (connectionString) {
   try {
-    pool = new Pool({ connectionString });
+    pool = new Pool({
+      connectionString,
+      // Supabase's pgbouncer pooler (port 6543, transaction mode) already
+      // pools connections upstream. Keep this side small so we never queue
+      // more work than pgbouncer is willing to accept from one client.
+      max: 8,
+      // Fail fast instead of hanging 30-50s when the pool is exhausted or
+      // the network path (Peshawar -> Seoul) is slow. This turns silent
+      // 50s+ stalls into a quick, retryable error.
+      connectionTimeoutMillis: 8_000,
+      // Release idle connections back so pgbouncer doesn't see a pile of
+      // long-lived idle clients from this process.
+      idleTimeoutMillis: 20_000,
+      // Supabase's pooler requires TLS; without this, some environments
+      // silently fall back to a slower/rejected negotiation path.
+      ssl: { rejectUnauthorized: false },
+    });
+
+    pool.on('error', (err) => {
+      // Prevents an idle-client network error from crashing the whole
+      // process via an unhandled 'error' event (this is a known pg gotcha).
+      console.error('[DB] Unexpected idle client error:', err.message);
+    });
   } catch (error) {
     console.error('Failed to parse DATABASE_URL:', error);
     throw error;
@@ -87,4 +109,3 @@ export interface Session {
   notes:      string | null;
   user_name?: string;
 }
-

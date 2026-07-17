@@ -22,7 +22,14 @@ export async function POST(req: NextRequest) {
   const user = requireAuth(req);
   if ('status' in user) return user;
 
-  const { action, sessionId, appName } = await req.json();
+  let body: any;
+  try {
+    const raw = await req.text();
+    body = raw ? JSON.parse(raw) : {};
+  } catch (e) {
+    return err('Invalid or missing JSON body', 400);
+  }
+  const { action, sessionId, appName } = body;
   // NOTE: "sessionId" here is actually the attendance.id, kept as the same
   // field name the client already sends to avoid changing the agent code.
 

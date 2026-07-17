@@ -8,8 +8,6 @@ import {
   ipcMain, powerMonitor, desktopCapturer, screen, shell, dialog, safeStorage
 } from 'electron';
 import os from 'os';
-import https from 'https';
-import http from 'http';
 import sharp from 'sharp';
 import { createClient } from '@supabase/supabase-js';
 import { EMBEDDED_ENV } from './embedded-config';
@@ -151,8 +149,10 @@ console.log('[AGENT] env load check', {
 // was never torn down on stopTracking()/logout, leaving an orphaned,
 // still-subscribed channel behind every time.
 import { setupLiveWatch, teardownLiveWatch } from './live-watch';
-import type { IncomingMessage } from 'http';
+import { startRecording, stopRecording } from './recordingmanager';
 import { syncProxyBlock, removeProxyBlock } from './websiteBlock';
+
+import { apiRequest as sharedApiRequest, apiFormRequest as sharedApiFormRequest, HttpError } from './http-client';
 
 // ─── Config ────────────────────────────────────────────────────────────────
 const isDev = !app.isPackaged;
@@ -263,6 +263,11 @@ let tracking     = false;
 let isQuitting   = false;
 let allowImmediateQuit = false;
 let quitInFlight: Promise<void> | null = null;
+// NEW: recording is opt-in now — only true once the user explicitly clicks
+// the "Record" button (start-recording IPC below), never as a side effect
+// of tracking/session start. Used to auto-resume recording after a break
+// or a live-watch reconnect, but only if the user actually turned it on.
+let recordingRequested = false;
 let ssInterval:         NodeJS.Timeout|null = null;
 let uploadInterval:     NodeJS.Timeout|null = null;
 let idleInterval:       NodeJS.Timeout|null = null;
@@ -321,6 +326,7 @@ async function requestGracefulQuit() {
         await stopTracking();
       } else {
         await teardownLiveWatch();
+        await stopRecording();
       }
     } catch (error) {
       console.error('[QUIT] graceful shutdown failed:', error);
@@ -352,58 +358,16 @@ app.commandLine.appendSwitch('disable-sync');
 app.commandLine.appendSwitch('no-pings');
 
 // ─── HTTP helper ────────────────────────────────────────────────────────────
-class HttpError extends Error {
-  status: number;
-  constructor(message:string, status:number) { super(message); this.status = status; }
+// Thin wrappers over http-client.ts that close over this module's SERVER_URL
+// and token, so every existing call site below (apiRequest('POST', ...),
+// apiFormRequest('/api/upload/screenshot', form)) keeps working unchanged,
+// while the actual implementation is shared with recording-manager.ts.
+function apiRequest(method: string, path: string, body?: any, isFormData = false): Promise<any> {
+  return sharedApiRequest(SERVER_URL, token, method, path, body, isFormData);
 }
 
-function apiRequest(method:string, path:string, body?:any, isFormData=false): Promise<any> {
-  return new Promise((resolve,reject) => {
-    const url  = new URL(path, SERVER_URL);
-    const mod  = url.protocol==='https:'?https:http;
-    const data = body && !isFormData ? Buffer.from(JSON.stringify(body)) : body;
-    const headers: Record<string,string> = {};
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    if (body && !isFormData) { headers['Content-Type']='application/json'; headers['Content-Length']=String(data.length); }
-    if (isFormData && body?.getHeaders) Object.assign(headers, body.getHeaders());
-    const req = (mod as any).request({ hostname:url.hostname, port:url.port||undefined, path:url.pathname+url.search, method, headers }, (res: IncomingMessage) => {
-      let raw = '';
-      res.on('data', (chunk: Buffer) => raw += chunk);
-      res.on('end', () => {
-        const status = res.statusCode || 0;
-        if (!raw) {
-          if (status >= 200 && status < 300) return resolve({});
-          return reject(new Error(`Request failed ${status}`));
-        }
-        try {
-          const parsed = JSON.parse(raw);
-          if (status >= 200 && status < 300) return resolve(parsed);
-          return reject(new HttpError(parsed?.error || `Request failed ${status}`, status));
-        } catch {
-          if (status >= 200 && status < 300) return resolve(raw);
-          return reject(new HttpError(`Request failed ${status}: ${raw}`, status));
-        }
-      });
-    });
-    req.setTimeout(15000, () => {
-      req.destroy(new Error('Request timed out'));
-    });
-    req.on('error', reject);
-    if (data) req.write(data);
-    req.end();
-  });
-}
-
-async function apiFormRequest(path:string, form:any) {
-  const url = new URL(path, SERVER_URL);
-  const headers: Record<string,string> = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res  = await fetch(url.toString(), { method:'POST', headers, body: form });
-  const body = await res.text();
-  if (!body) { if (res.ok) return {}; throw new HttpError(`Request failed ${res.status}`, res.status); }
-  const parsed = JSON.parse(body);
-  if (!res.ok) throw new HttpError(parsed?.error || `Request failed ${res.status}`, res.status);
-  return parsed;
+async function apiFormRequest(path: string, form: FormData) {
+  return sharedApiFormRequest(SERVER_URL, token, path, form);
 }
 
 async function sessionAction(action:string, payload: Record<string, any> = {}) {
@@ -422,6 +386,11 @@ async function startSession() {
   }
 }
 
+// CHANGED: this used to also call startRecording() unconditionally, which
+// meant recording auto-started the moment tracking/session began. Recording
+// is now button-gated — see ensureRecordingRunning() below, which is only
+// ever invoked when recordingRequested is true (i.e. the user clicked the
+// Record button at some point in this session).
 async function ensureLiveWatchRunning() {
   if (!tracking || !token || !employeeId || !sessionId) return;
 
@@ -434,6 +403,26 @@ async function ensureLiveWatchRunning() {
     });
   } catch (err:any) {
     console.error('Failed to start live watch:', err?.message || err);
+  }
+}
+
+// NEW: recording is only (re)started here, and only if the user has
+// explicitly requested it via the Record button (recordingRequested).
+// Called after breaks end and periodically alongside the heartbeat, so a
+// user-started recording survives a break or a dropped connection without
+// ever auto-starting on its own for someone who never clicked Record.
+async function ensureRecordingRunning() {
+  if (!recordingRequested || !tracking || !token || !employeeId || !sessionId) return;
+
+  try {
+    await startRecording({
+      employeeId,
+      sessionId,
+      authToken: token,
+      serverUrl: SERVER_URL,
+    });
+  } catch (err:any) {
+    console.error('Failed to start recording:', err?.message || err);
   }
 }
 
@@ -452,16 +441,38 @@ async function endSession() {
       sessionId: sessionIdToClose,
       stopRoom: true,
     });
+    await stopRecording();
+    recordingRequested = false; // next session starts with recording off again
     sessionId = '';
   }
 }
 
-async function getActiveWindowSnapshot() {
+let activeWinFn: (() => Promise<any>) | null | undefined; // undefined = not yet resolved
+
+async function getActiveWin() {
+  if (activeWinFn !== undefined) return activeWinFn;
   try {
-    const activeWinModule = require('active-win');
-    return await activeWinModule.default();
-  } catch (err:any) {
+    const mod: any = await import('active-win');
+    const candidate = typeof mod === 'function' ? mod
+      : typeof mod?.default === 'function' ? mod.default
+      : typeof mod?.default?.default === 'function' ? mod.default.default
+      : null;
+    if (!candidate) throw new Error('active-win export shape unrecognized');
+    activeWinFn = candidate;
+  } catch (err: any) {
     console.warn('[AGENT] active-win unavailable, foreground app detection disabled', err?.message || err);
+    activeWinFn = null;
+  }
+  return activeWinFn;
+}
+
+async function getActiveWindowSnapshot() {
+  const fn = await getActiveWin();
+  if (!fn) return null;
+  try {
+    return await fn();
+  } catch (err: any) {
+    console.warn('[AGENT] active-win call failed', err?.message || err);
     return null;
   }
 }
@@ -837,7 +848,7 @@ if (!isDev && configuredServerUrl && isLocalServerUrl(configuredServerUrl)) {
 function broadcastStatus(extra: Record<string, any> = {}) {
   // This is a local renderer update, not proof that the API accepted a
   // heartbeat. Only send `heartbeat` after /api/heartbeat succeeds.
-  const payload = { agentId, employeeId, userName, status, sessionId, activeApp: lastActiveApp, activityPct: lastActivityPct, capturedAt: new Date().toISOString(), ...extra };
+  const payload = { agentId, employeeId, userName, status, sessionId, activeApp: lastActiveApp, activityPct: lastActivityPct, capturedAt: new Date().toISOString(), recording: recordingRequested, ...extra };
   mainWindow?.webContents.send('status-changed', payload);
 }
 
@@ -848,6 +859,7 @@ async function sendHeartbeat() {
     const heartbeat = new Date().toISOString();
     mainWindow?.webContents.send('status-changed', { status, userName, employeeId, heartbeat });
     void ensureLiveWatchRunning();
+    void ensureRecordingRunning();
   } catch (err:any) { console.error('Heartbeat failed:', err?.message || err); }
 }
 
@@ -918,6 +930,9 @@ async function startTracking() {
 
   await startSession();
   await ensureLiveWatchRunning();
+  // Recording is NOT started here — it stays off until the user clicks
+  // Record (start-recording IPC), regardless of whether it was on in a
+  // previous tracking session.
 
   ssInterval         = setInterval(captureAndUpload, captureIntervalSec * 1000);         // 5s capture
   uploadInterval      = setInterval(() => { void flushScreenshotQueue(); }, uploadIntervalSec * 1000); // 30s batch upload
@@ -944,7 +959,7 @@ async function stopTracking() {
   tracking = false;
   status = 'offline';
 
-  await endSession();
+  await endSession(); // also stops recording + resets recordingRequested
 
   ssInterval = clearTimer(ssInterval);
   uploadInterval = clearTimer(uploadInterval);
@@ -1000,25 +1015,27 @@ async function flushScreenshotQueue() {
   if (screenshotFlushInFlight || !screenshotQueue.length || !token) return;
   screenshotFlushInFlight = true;
   const batch = screenshotQueue.splice(0, 10);
+  const UPLOAD_CONCURRENCY = 3; // send at most 3 at once instead of all 10,
+                                 // so we don't burst the server's DB pool
   try {
-    await Promise.all(batch.map(async (shot) => {
-      try {
-        await uploadScreenshotFile(shot);
-      } catch (error: any) {
-        const nextAttempts = shot.attempts + 1;
-        if (nextAttempts < MAX_UPLOAD_ATTEMPTS) {
-          console.warn(`[SCREENSHOTS] Upload failed (attempt ${nextAttempts}/${MAX_UPLOAD_ATTEMPTS}), will retry next flush:`, error?.message || error);
-          screenshotQueue.push({ ...shot, attempts: nextAttempts });
-        } else {
-          console.error(`[SCREENSHOTS] Upload failed ${MAX_UPLOAD_ATTEMPTS} times, dropping screenshot:`, error?.message || error);
+    for (let i = 0; i < batch.length; i += UPLOAD_CONCURRENCY) {
+      const chunk = batch.slice(i, i + UPLOAD_CONCURRENCY);
+      await Promise.all(chunk.map(async (shot) => {
+        try {
+          await uploadScreenshotFile(shot);
+        } catch (error: any) {
+          const nextAttempts = shot.attempts + 1;
+          if (nextAttempts < MAX_UPLOAD_ATTEMPTS) {
+            console.warn(`[SCREENSHOTS] Upload failed (attempt ${nextAttempts}/${MAX_UPLOAD_ATTEMPTS}), will retry next flush:`, error?.message || error);
+            screenshotQueue.push({ ...shot, attempts: nextAttempts });
+          } else {
+            console.error(`[SCREENSHOTS] Upload failed ${MAX_UPLOAD_ATTEMPTS} times, dropping screenshot:`, error?.message || error);
+          }
         }
-      }
-    }));
+      }));
+    }
   } finally {
     screenshotFlushInFlight = false;
-    // NOTE: no self-rescheduling here — uploadInterval already fires every
-    // 30s regardless, so re-arming scheduleScreenshotFlush would just create
-    // a second, redundant flush path. Left only as the >=10-item safety net.
   }
 }
 
@@ -1192,7 +1209,7 @@ ipcMain.handle('logout', async (event) => {
   mainWindow?.show();
   return { ok:true };
 });
-ipcMain.handle('get-status',       (event) => { assertMainRenderer(event); return { tracking, status, sessionId, userName, captureIntervalSec, idleSec: powerMonitor.getSystemIdleTime(), startedAt: status !== 'offline' ? Date.now() : null }; });
+ipcMain.handle('get-status',       (event) => { assertMainRenderer(event); return { tracking, status, sessionId, userName, captureIntervalSec, recording: recordingRequested, idleSec: powerMonitor.getSystemIdleTime(), startedAt: status !== 'offline' ? Date.now() : null }; });
 ipcMain.handle('get-alerts',       async (event) => { assertMainRenderer(event); return getStoredAlerts(); });
 ipcMain.handle('sync-alerts',      async (event) => { assertMainRenderer(event); return syncAlertsWithServer(); });
 ipcMain.handle('mark-alert-read',  async (event, id:string) => { assertMainRenderer(event); return markAlertRead(id); });
@@ -1201,12 +1218,32 @@ ipcMain.handle('manual-shot',      (event) => { assertMainRenderer(event); retur
 ipcMain.handle('stop-tracking',    (event) => { assertMainRenderer(event); return stopTracking(); });
 ipcMain.handle('start-tracking',   (event) => { assertMainRenderer(event); status = 'active'; return startTracking(); });
 ipcMain.handle('start-work',       async (event) => { assertMainRenderer(event); status = 'active'; await startTracking(); return { ok: true }; });
+// NEW: explicit "Record" button handlers. Only these two set/clear
+// recordingRequested — nothing else in the app auto-starts recording.
+ipcMain.handle('start-recording', async (event) => {
+  assertMainRenderer(event);
+  if (!tracking) {
+    return { ok: false, error: 'Start tracking before recording' };
+  }
+  recordingRequested = true;
+  await ensureRecordingRunning();
+  broadcastStatus();
+  return { ok: true };
+});
+ipcMain.handle('stop-recording', async (event) => {
+  assertMainRenderer(event);
+  recordingRequested = false;
+  await stopRecording();
+  broadcastStatus();
+  return { ok: true };
+});
 ipcMain.handle('start-break',      async (event) => {
   assertMainRenderer(event);
   status = 'break';
   ssInterval = clearTimer(ssInterval);
   uploadInterval = clearTimer(uploadInterval);
   heartbeatInterval = clearTimer(heartbeatInterval);
+  await stopRecording();
   await sessionAction('start_break', { sessionId });
   broadcastStatus();
   return { ok: true };
@@ -1221,6 +1258,11 @@ ipcMain.handle('end-break', async (event) => {
   ssInterval        = setInterval(captureAndUpload, captureIntervalSec * 1000);
   uploadInterval    = setInterval(() => { void flushScreenshotQueue(); }, uploadIntervalSec * 1000);
   heartbeatInterval = setInterval(() => sendHeartbeat(), 30000);
+  // Resumes LiveKit watch always, and resumes recording only if the user
+  // had it on (recordingRequested) before the break — same
+  // employeeId/sessionId/token that were active before the break.
+  await ensureLiveWatchRunning();
+  await ensureRecordingRunning();
   broadcastStatus();
   return { ok: true };
 });

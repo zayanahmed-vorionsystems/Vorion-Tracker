@@ -1,3 +1,4 @@
+// app/api/live/self-stop/route.ts
 import { NextRequest } from 'next/server';
 import { sql } from '@/lib/db';
 import { requireAuth, err, ok } from '@/lib/api';
@@ -20,16 +21,9 @@ export async function POST(req: NextRequest) {
     LIMIT 1
   `;
 
-  if (!attendance) {
-    return ok({ ok: true, alreadyStopped: true });
-  }
+  if (!attendance) return ok({ ok: true, alreadyStopped: true });
 
-  try {
-    const roomName = getLiveKitRoomName(attendance.employee_id, attendance.id);
-    await getLiveKitRoomService().deleteRoom(roomName).catch(() => undefined);
-    return ok({ ok: true, roomName });
-  } catch (error: any) {
-    console.error('[live/stop] failed', error?.stack || error);
-    return err(error?.message || 'Failed to stop live room', 500);
-  }
+  const roomName = getLiveKitRoomName(attendance.employee_id, attendance.id);
+  await getLiveKitRoomService().deleteRoom(roomName).catch(() => undefined);
+  return ok({ ok: true, roomName });
 }

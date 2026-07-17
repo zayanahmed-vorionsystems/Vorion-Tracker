@@ -1,7 +1,7 @@
-import { BrowserWindow, desktopCapturer, ipcMain, screen } from 'electron';
+﻿import { BrowserWindow, desktopCapturer, ipcMain, screen } from 'electron';
 import fs from 'fs';
 import path from 'path';
-
+import { startRecording, stopRecording } from './recordingmanager';
 type LiveWatchConfig = {
   employeeId: string;
   sessionId: string;
@@ -131,14 +131,40 @@ function getOrCreateCaptureWindow() {
 
 async function waitForCaptureWindow() {
   if (captureWindowReady) return;
-  await Promise.race([
-    captureReadyPromise,
-    new Promise<void>((_, reject) => {
-      setTimeout(() => reject(new Error('Timed out waiting for capture renderer')), 8000);
-    }),
-  ]);
+  try {
+    await Promise.race([
+      captureReadyPromise,
+      new Promise<void>((_, reject) => {
+        setTimeout(() => reject(new Error('Timed out waiting for capture renderer')), 8000);
+      }),
+    ]);
+  } catch (error) {
+    // Stuck/broken window â€” destroy it so the next attempt gets a fresh one.
+    if (captureWindow && !captureWindow.isDestroyed()) {
+      captureWindow.destroy();
+    }
+    captureWindow = null;
+    captureWindowReady = false;
+    captureReadyPromise = null;
+    resolveCaptureReady = null;
+    throw error;
+  }
 }
+async function ensureLiveWatchRunning(tracking?: boolean, token?: string, employeeId?: string, sessionId?: string, SERVER_URL?: string) {
+  if (!tracking || !token || !employeeId || !sessionId) return;
 
+  try {
+    await setupLiveWatch({ employeeId, sessionId, authToken: token, serverUrl: SERVER_URL || '' });
+  } catch (err: any) {
+    console.error('Failed to start live watch:', err?.message || err);
+  }
+
+  try {
+    await startRecording({ employeeId, sessionId, authToken: token, serverUrl: SERVER_URL || '' });
+  } catch (err: any) {
+    console.error('Failed to start recording:', err?.message || err);
+  }
+}
 async function getScreenSourceId() {
   const sources = await desktopCapturer.getSources({
     types: ['screen'],

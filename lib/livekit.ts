@@ -24,20 +24,26 @@ export function getLiveKitRoomService() {
     getLiveKitEnv('LIVEKIT_API_KEY'),
     getLiveKitEnv('LIVEKIT_API_SECRET'),
   );
+}async function withRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 1000): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (retries <= 0) throw err;
+    await new Promise((r) => setTimeout(r, delayMs));
+    return withRetry(fn, retries - 1, delayMs);
+  }
 }
 
 export async function ensureLiveKitRoom(roomName: string) {
   const roomService = getLiveKitRoomService();
-  const existingRooms = await roomService.listRooms([roomName]);
-
-  if (existingRooms.length > 0) {
-    return existingRooms[0];
-  }
-
-  return roomService.createRoom({
-    name: roomName,
-    emptyTimeout: 60,
-    departureTimeout: 120,
+  return withRetry(async () => {
+    const existingRooms = await roomService.listRooms([roomName]);
+    if (existingRooms.length > 0) return existingRooms[0];
+    return roomService.createRoom({
+      name: roomName,
+      emptyTimeout: 60,
+      departureTimeout: 120,
+    });
   });
 }
 
