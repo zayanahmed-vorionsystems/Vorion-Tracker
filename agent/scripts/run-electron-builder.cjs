@@ -28,11 +28,12 @@ function removeIfExists(filePath) {
 function cleanupReleaseArtifacts() {
   removeIfExists(path.join(releaseDir, 'worktrack-agent-1.0.0-x64.nsis.7z'));
   removeIfExists(path.join(releaseDir, 'Vorion Tracker 1.0.0.exe'));
+  removeIfExists(path.join(releaseDir, 'Vorion Tracker Setup 1.0.0.exe'));
 }
 
 function runBuilder() {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [electronBuilderBin, '--win'], {
+    const child = spawn(process.execPath, [electronBuilderBin, '--win', '--x64'], {
       cwd: projectRoot,
       stdio: 'inherit',
       env: process.env,

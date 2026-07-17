@@ -14,6 +14,15 @@ type AlertRecord = {
   isRead: boolean;
 };
 
+type UpdaterState = {
+  currentVersion: string;
+  message: string;
+  downloaded: boolean;
+  checking: boolean;
+  progress: number | null;
+  error: string;
+};
+
 const LABELS: Record<AgentStatus, string> = {
   active: 'Active',
   break: 'Break',
@@ -36,6 +45,14 @@ export default function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [alerts, setAlerts] = useState<AlertRecord[]>([]);
   const [alertsOpen, setAlertsOpen] = useState(false);
+  const [updater, setUpdater] = useState<UpdaterState>({
+    currentVersion: '',
+    message: '',
+    downloaded: false,
+    checking: false,
+    progress: null,
+    error: '',
+  });
 
   const unreadCount = alerts.filter((alert) => !alert.isRead).length;
 
@@ -146,6 +163,61 @@ export default function App() {
     });
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+    window.agent?.updater?.getStatus?.().then((statusData:any) => {
+      if (!mounted) return;
+      setUpdater((prev) => ({
+        ...prev,
+        currentVersion: statusData?.currentVersion || '',
+        downloaded: Boolean(statusData?.downloaded),
+        checking: Boolean(statusData?.checking),
+        message: statusData?.downloadedVersion ? 'Update downloaded. Restart to install.' : prev.message,
+      }));
+    });
+
+    const subscriptions = [
+      window.agent?.updater?.on?.('updater:checking', (data:any) => {
+        setUpdater((prev) => ({ ...prev, currentVersion: data?.currentVersion || prev.currentVersion, checking: true, error: '', progress: null, message: 'Checking for updates...' }));
+      }),
+      window.agent?.updater?.on?.('updater:available', (data:any) => {
+        setUpdater((prev) => ({ ...prev, currentVersion: data?.currentVersion || prev.currentVersion, checking: false, error: '', message: `Version ${data?.version || ''} is available.`.trim() }));
+      }),
+      window.agent?.updater?.on?.('updater:not-available', (data:any) => {
+        setUpdater((prev) => ({ ...prev, currentVersion: data?.currentVersion || prev.currentVersion, checking: false, error: '', progress: null, message: 'You are using the latest version.' }));
+      }),
+      window.agent?.updater?.on?.('updater:progress', (data:any) => {
+        const percent = Number(data?.percent || 0);
+        setUpdater((prev) => ({ ...prev, checking: false, error: '', progress: percent, message: `Downloading update ${Math.round(percent)}%` }));
+      }),
+      window.agent?.updater?.on?.('updater:downloaded', (data:any) => {
+        setUpdater((prev) => ({ ...prev, currentVersion: data?.currentVersion || prev.currentVersion, checking: false, downloaded: true, progress: 100, error: '', message: 'Update downloaded. Restart to install.' }));
+      }),
+      window.agent?.updater?.on?.('updater:error', (data:any) => {
+        setUpdater((prev) => ({ ...prev, currentVersion: data?.currentVersion || prev.currentVersion, checking: false, error: data?.message || 'Update check failed.', message: '' }));
+      }),
+    ].filter(Boolean);
+
+    return () => {
+      mounted = false;
+      subscriptions.forEach((unsubscribe:any) => unsubscribe?.());
+    };
+  }, []);
+
+  const checkForUpdates = async () => {
+    setUpdater((prev) => ({ ...prev, checking: true, error: '', progress: null, message: 'Checking for updates...' }));
+    const result = await window.agent?.updater?.check?.();
+    if (result?.error) {
+      setUpdater((prev) => ({ ...prev, checking: false, error: result.error, message: '' }));
+    }
+  };
+
+  const installUpdate = async () => {
+    const result = await window.agent?.updater?.install?.();
+    if (result?.error) {
+      setUpdater((prev) => ({ ...prev, error: result.error }));
+    }
+  };
 
   return (
     <div style={{ fontFamily:'-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif', minHeight:'100vh', background:'radial-gradient(circle at top, #1f2937 0%, #05070b 70%, #020304 100%)', padding:20, color:'#f8fafc' }}>
@@ -264,6 +336,29 @@ export default function App() {
             </div>
           </div>
         )}
+
+        <div style={{ marginTop:18, padding:'14px 16px', borderRadius:16, background:'rgba(255,255,255,0.04)', border:'1px solid rgba(255,255,255,0.08)', boxShadow:'inset 0 1px 0 rgba(255,255,255,0.05)' }}>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+            <div>
+              <div style={{ fontSize:12, fontWeight:700, color:'#f8fafc' }}>Vorion Tracker {updater.currentVersion || ''}</div>
+              <div style={{ fontSize:12, color: updater.error ? '#fda4af' : '#94a3b8', marginTop:4 }}>{updater.error || updater.message || 'Updates are checked automatically in the installed app.'}</div>
+            </div>
+            {updater.downloaded ? (
+              <button onClick={installUpdate} style={{ border:'1px solid rgba(34,197,94,0.32)', borderRadius:12, background:'rgba(34,197,94,0.16)', color:'#dcfce7', padding:'9px 12px', cursor:'pointer', fontSize:12, fontWeight:700 }}>
+                Restart and Update
+              </button>
+            ) : (
+              <button disabled={updater.checking} onClick={checkForUpdates} style={{ border:'1px solid rgba(255,255,255,0.14)', borderRadius:12, background:'rgba(255,255,255,0.04)', color:'#f8fafc', padding:'9px 12px', cursor: updater.checking ? 'default' : 'pointer', fontSize:12, fontWeight:700, opacity: updater.checking ? 0.7 : 1 }}>
+                {updater.checking ? 'Checking...' : 'Check for Updates'}
+              </button>
+            )}
+          </div>
+          {updater.progress !== null && updater.progress < 100 && (
+            <div style={{ height:6, borderRadius:999, background:'rgba(255,255,255,0.08)', overflow:'hidden', marginTop:12 }}>
+              <div style={{ height:'100%', width:`${Math.max(0, Math.min(100, updater.progress))}%`, background:'#f8d000' }} />
+            </div>
+          )}
+        </div>
 
         <p style={{ marginTop:22, fontSize:12, color:'#64748b', lineHeight:1.75 }}>Screenshots every 5 seconds, app tracking, website tracking, heartbeat, and monitoring run silently in the background. The admin dashboard receives real-time status updates.</p>
       </div>

@@ -60,33 +60,33 @@ export async function POST(request: NextRequest) {
     const fileName = `live-${employeeId || 'unknown'}-${Date.now()}.webm`;
 
     if (supabaseAdmin) {
-      const { data, error } = await supabaseAdmin.storage
-        .from('live-recordings')
-        .upload(fileName, buffer, {
-          contentType: file.type || 'video/webm',
-          cacheControl: '3600',
-          upsert: false,
-        });
+  const { data, error } = await supabaseAdmin.storage
+    .from('live-recordings')
+    .upload(fileName, buffer, {
+      contentType: file.type || 'video/webm',
+      cacheControl: '3600',
+      upsert: false,
+    });
 
-      if (error) {
-        console.error('[live-recordings] Supabase upload failed', error);
-        return err(error.message, 500);
-      }
+  if (error) {
+    console.error('[live-recordings] Supabase upload failed', error);
+    return err(error.message, 500);
+  }
 
-      const { data: signedData } = await supabaseAdmin.storage
-        .from('live-recordings')
-        .createSignedUrl(data?.path || fileName, 60 * 60);
+  const { data: signedData } = await supabaseAdmin.storage
+    .from('live-recordings')
+    .createSignedUrl(data?.path || fileName, 60 * 60);
 
-      return ok({
-        ok: true,
-        employeeId,
-        adminId: user.sub,
-        startTime,
-        endTime,
-        duration,
-        fileUrl: signedData?.signedUrl || null,
-      });
-    }
+  return ok({
+    ok: true,
+    employeeId,
+    adminId: user.sub,
+    startTime,
+    endTime,
+    duration,
+    fileUrl: signedData?.signedUrl || null,
+  });
+}
 
     return ok({
       ok: true,
