@@ -14,6 +14,7 @@ import sharp from 'sharp';
 import { createClient } from '@supabase/supabase-js';
 import log from 'electron-log/main';
 import { autoUpdater } from 'electron-updater';
+import { upload as uploadBlob } from '@vercel/blob/client';
 import { EMBEDDED_ENV } from './embedded-config';
 
 function getAncestorEnvCandidates(baseDir: string) {
@@ -421,9 +422,10 @@ async function apiFormRequest(path:string, form:any) {
   return parsed;
 }
 
-type SignedScreenshotUpload = {
+type BlobScreenshotUpload = {
   path: string;
-  signedUrl: string;
+  url: string;
+  downloadUrl?: string;
   contentType?: string;
 };
 
@@ -538,21 +540,22 @@ async function uploadScreenshotFile(shot: PendingScreenshot) {
 }
 
 // ─── Alerts ────────────────────────────────────────────────────────────────
-async function uploadToSignedStorageUrl(upload: SignedScreenshotUpload, shot: PendingScreenshot) {
-  const res = await fetch(upload.signedUrl, {
-    method: 'PUT',
-    headers: {
-      'cache-control': 'max-age=3600',
-      'content-type': shot.imageMime,
-      'x-upsert': 'false',
-    },
-    body: shot.imageBuf as any,
+async function uploadScreenshotToBlob(shot: PendingScreenshot): Promise<BlobScreenshotUpload> {
+  const pathname = `screenshots/${employeeId}/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${shot.imageExt}`;
+  const blob = await uploadBlob(pathname, shot.imageBuf, {
+    access: 'public',
+    contentType: shot.imageMime,
+    handleUploadUrl: new URL('/api/blob/client-upload', SERVER_URL).toString(),
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    clientPayload: JSON.stringify({ kind: 'screenshot' }),
   });
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new HttpError(text || `Signed upload failed ${res.status}`, res.status);
-  }
+  return {
+    path: blob.pathname,
+    url: blob.url,
+    downloadUrl: blob.downloadUrl,
+    contentType: blob.contentType,
+  };
 }
 
 async function uploadScreenshotBatch(batch: PendingScreenshot[]) {
@@ -562,23 +565,14 @@ async function uploadScreenshotBatch(batch: PendingScreenshot[]) {
     return batch;
   }
 
-  const prepare = await apiRequest('POST', '/api/agent/screenshots/upload-urls', {
-    screenshots: batch.map((shot) => ({
-      contentType: shot.imageMime,
-      ext: shot.imageExt,
-    })),
-  });
-  const uploads = Array.isArray(prepare?.uploads) ? prepare.uploads as SignedScreenshotUpload[] : [];
-  if (uploads.length !== batch.length) throw new Error('Upload URL count did not match screenshot batch');
-
   const uploadResults = await Promise.allSettled(
-    batch.map((shot, index) => uploadToSignedStorageUrl(uploads[index], shot)),
+    batch.map((shot) => uploadScreenshotToBlob(shot)),
   );
-  const committed: Array<{ shot: PendingScreenshot; upload: SignedScreenshotUpload }> = [];
+  const committed: Array<{ shot: PendingScreenshot; upload: BlobScreenshotUpload }> = [];
   const failed: PendingScreenshot[] = [];
 
   uploadResults.forEach((result, index) => {
-    if (result.status === 'fulfilled') committed.push({ shot: batch[index], upload: uploads[index] });
+    if (result.status === 'fulfilled') committed.push({ shot: batch[index], upload: result.value });
     else failed.push(batch[index]);
   });
 
@@ -587,6 +581,7 @@ async function uploadScreenshotBatch(batch: PendingScreenshot[]) {
       await apiRequest('POST', '/api/agent/screenshots/commit', {
         screenshots: committed.map(({ shot, upload }) => ({
           path: upload.path,
+          url: upload.url,
           deviceId: agentId,
           activeApp: shot.activeApp,
           activityPct: shot.activityPct,
@@ -1298,9 +1293,8 @@ function scheduleScreenshotFlush() {
   }, 60_000);
 }
 
-// Flushes the local queue by POSTing each screenshot directly to our backend's
-// Blob-backed upload endpoint. No signed URLs, no direct-to-storage traffic —
-// the backend is the only thing that ever talks to Vercel Blob.
+// Flushes the local queue by uploading screenshots directly to Vercel Blob,
+// then POSTing only metadata to our backend.
 async function flushScreenshotQueue() {
   if (screenshotFlushInFlight || !screenshotQueue.length || !token) return;
   screenshotFlushInFlight = true;
