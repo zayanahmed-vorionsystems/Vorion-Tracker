@@ -13,6 +13,7 @@ const rawDatabaseUrl = process.env.DATABASE_URL ?? '';
 const connectionString = rawDatabaseUrl ? stripQuotes(rawDatabaseUrl) : '';
 
 let pool: Pool | null = null;
+const tableColumnCache = new Map<string, Promise<Set<string>>>();
 
 if (connectionString) {
   try {
@@ -41,6 +42,33 @@ export async function withTransaction<T>(callback: (client: PoolClient) => Promi
   } finally {
     client.release();
   }
+}
+
+export async function queryRows(text: string, values: any[] = []) {
+  if (!pool) throw new Error('DATABASE_URL environment variable is not set');
+  const res = await pool.query(text, values);
+  return res.rows;
+}
+
+export async function getExistingColumns(tableName: string, columnNames: string[], schemaName = 'public') {
+  const cacheKey = `${schemaName}.${tableName}:${columnNames.slice().sort().join(',')}`;
+  if (!tableColumnCache.has(cacheKey)) {
+    tableColumnCache.set(cacheKey, (async () => {
+      const rows = await queryRows(
+        `SELECT column_name
+         FROM information_schema.columns
+         WHERE table_schema = $1
+           AND table_name = $2
+           AND column_name = ANY($3::text[])`,
+        [schemaName, tableName, columnNames],
+      );
+      return new Set(rows.map((row: any) => row.column_name));
+    })().catch((error) => {
+      tableColumnCache.delete(cacheKey);
+      throw error;
+    }));
+  }
+  return tableColumnCache.get(cacheKey)!;
 }
 
 export const sql: any = async (strings: TemplateStringsArray, ...values: any[]) => {

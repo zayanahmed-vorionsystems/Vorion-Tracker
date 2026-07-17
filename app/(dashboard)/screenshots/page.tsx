@@ -49,6 +49,7 @@ export default function ScreenshotsPage() {
   const canEmailFlag = canSendFlagReports(role);
 
   useEffect(() => {
+    if (!token) return;
     fetch('/api/users',{headers:{Authorization:`Bearer ${token}`}})
       .then(r=>r.json()).then(d=>setUsers(d.filter((u:any)=>u.role==='employee')));
   },[token]);
@@ -187,7 +188,7 @@ export default function ScreenshotsPage() {
                 boxShadow: '0 15px 35px rgba(0,0,0,.35)',
               }}>
               <div style={{ aspectRatio:'16/9',background:BRAND.black,overflow:'hidden' }}>
-                <img src={s.file_url} alt="" style={{ width:'100%',height:'100%',objectFit:'cover',transition:'transform .3s ease' }}
+                <img src={s.file_url} alt="" loading="lazy" decoding="async" style={{ width:'100%',height:'100%',objectFit:'cover',transition:'transform .3s ease' }}
                   onMouseEnter={(e)=>{ e.currentTarget.style.transform='scale(1.05)'; }}
                   onMouseLeave={(e)=>{ e.currentTarget.style.transform='scale(1)'; }}
                   onError={e=>(e.currentTarget.style.display='none')}/>

@@ -1,10 +1,11 @@
 ﻿// app/api/screenshots/route.ts
 import { NextRequest } from 'next/server';
 import { randomUUID } from 'crypto';
-import { put, del } from '@vercel/blob';
-import { sql } from '@/lib/db';
+import { del, put } from '@vercel/blob';
+import { getExistingColumns, queryRows, sql, withTransaction } from '@/lib/db';
 import { requireAuth, ok, err } from '@/lib/api';
 import { emitSocketEvent } from '@/lib/socket';
+import { assertSupabaseAdmin } from '@/lib/supabase';
 import { canDeleteRecords, canMonitorAll, normalizeRole } from '@/lib/roles';
 import {
   BUSINESS_TIME_ZONE,
@@ -18,12 +19,32 @@ const MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024;
 
 function isAllowedScreenshotType(type: string) {
   const normalized = String(type || '').trim().toLowerCase();
-  return normalized === 'image/png' || normalized === 'image/jpeg';
+  return normalized === 'image/png' || normalized === 'image/jpeg' || normalized === 'image/webp';
+}
+
+function getSupabaseObjectPath(publicUrl: string) {
+  try {
+    const pathname = new URL(publicUrl).pathname;
+    const marker = '/storage/v1/object/public/screenshots/';
+    const index = pathname.indexOf(marker);
+    if (index === -1) return null;
+    return decodeURIComponent(pathname.slice(index + marker.length));
+  } catch {
+    return null;
+  }
+}
+
+function getScreenshotUrlExpression(columns: Set<string>, tableAlias = 's') {
+  const hasBlobUrl = columns.has('blob_url');
+  const hasFileUrl = columns.has('file_url');
+  if (hasBlobUrl && hasFileUrl) return `COALESCE(${tableAlias}.blob_url, ${tableAlias}.file_url)`;
+  if (hasBlobUrl) return `${tableAlias}.blob_url`;
+  if (hasFileUrl) return `${tableAlias}.file_url`;
+  throw new Error('screenshots table is missing a URL column');
 }
 
 export async function POST(req: NextRequest) {
   if (!process.env.DATABASE_URL) return err('Server misconfigured: DATABASE_URL not set', 500);
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return err('Server misconfigured: BLOB_READ_WRITE_TOKEN not set', 500);
   const user = requireAuth(req);
   if ('status' in user) return user;
 
@@ -43,23 +64,30 @@ export async function POST(req: NextRequest) {
       return err('Unsupported screenshot file type', 400);
     }
 
-    const arrayBuffer = await file.arrayBuffer();
-    const buffer      = Buffer.from(arrayBuffer);
-    const extension   = file.type === 'image/jpeg' ? 'jpg' : 'png';
+    const extension   = file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : 'png';
     const blobKey      = `screenshots/${user.sub}/${Date.now()}-${randomUUID()}.${extension}`;
 
-    const blob = await put(blobKey, buffer, {
+    const blob = await put(blobKey, file, {
       access: 'public',
       contentType: file.type || 'image/png',
       addRandomSuffix: false,
     });
     const publicUrl = blob.url;
 
-    const [ss] = await sql`
-      INSERT INTO screenshots (employee_id, blob_url, captured_at, active_app, activity_pct, session_id)
-      VALUES (${user.sub}, ${publicUrl}, ${capturedAt}, ${activeApp}, ${actPct}, ${sessionId})
-      RETURNING id
-    `;
+    const availableColumns = await getExistingColumns('screenshots', ['blob_url', 'file_url']);
+    const ss = await withTransaction(async (client) => {
+      const urlColumns = ['blob_url', 'file_url'].filter((column) => availableColumns.has(column));
+      if (!urlColumns.length) throw new Error('screenshots table is missing a URL column');
+
+      const columns = ['employee_id', ...urlColumns, 'captured_at', 'active_app', 'activity_pct', 'session_id'];
+      const values = [user.sub, ...urlColumns.map(() => publicUrl), capturedAt, activeApp, actPct, sessionId];
+      const placeholders = values.map((_, index) => `$${index + 1}`).join(', ');
+      const inserted = await client.query(
+        `INSERT INTO screenshots (${columns.join(', ')}) VALUES (${placeholders}) RETURNING id`,
+        values,
+      );
+      return inserted.rows[0];
+    });
 
     const presenceTimestamp = new Date().toISOString();
     const [presenceRow] = await sql`
@@ -127,20 +155,23 @@ export async function GET(req: NextRequest) {
         ? getShiftDateInTimeZone(new Date(), effectiveTimeZone)
         : getLocalDateInTimeZone(new Date(), effectiveTimeZone)
     );
+    const availableColumns = await getExistingColumns('screenshots', ['blob_url', 'file_url']);
+    const screenshotUrlExpression = getScreenshotUrlExpression(availableColumns);
 
     let rows;
 
     if (role === 'employee') {
-      rows = await sql`
-        SELECT s.id, s.employee_id, s.blob_url AS file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
+      rows = await queryRows(
+        `SELECT s.id, s.employee_id, ${screenshotUrlExpression} AS file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
         FROM screenshots s
         JOIN public.profiles p ON p.id = s.employee_id
-        WHERE s.employee_id = ${sub}
-          AND DATE(s.captured_at) = ${date}
-          AND s.captured_at < ${beforeIso}
+        WHERE s.employee_id = $1
+          AND DATE(s.captured_at) = $2
+          AND s.captured_at < $3
         ORDER BY s.captured_at DESC
-        LIMIT ${limit}
-      `;
+        LIMIT $4`,
+        [sub, date, beforeIso, limit],
+      );
     } else if (role === 'client') {
       const assignedRows = filterUserId
         ? await sql`
@@ -161,61 +192,74 @@ export async function GET(req: NextRequest) {
         return ok([]);
       }
 
-      const allRows: any[] = [];
-      for (const assigned of assignedRows) {
+      const values: any[] = [];
+      const valueRows = assignedRows.map((assigned: any) => {
         const shiftType = assigned.assignment_shift_type || 'full_time';
         const shiftRange = getShiftRangeForDate(date, shiftType);
         const shiftWindows = getShiftWindowsForDate(date, shiftType);
         const firstWindow = shiftWindows[0];
         const secondWindow = shiftWindows[1] || firstWindow;
         const hasSecondWindow = shiftWindows.length > 1;
-        const chunk = await sql`
-          SELECT s.id, s.employee_id, s.blob_url AS file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
-          FROM screenshots s
-          JOIN public.profiles p ON p.id = s.employee_id
-          WHERE s.employee_id = ${assigned.id}
-            AND s.captured_at >= ${shiftRange.startIso}
-            AND s.captured_at < ${shiftRange.endIso}
-            AND s.captured_at < ${beforeIso}
-            AND (
-              (s.captured_at >= ${firstWindow.start.toISOString()} AND s.captured_at < ${firstWindow.end.toISOString()})
-              OR (
-                ${hasSecondWindow}
-                AND s.captured_at >= ${secondWindow.start.toISOString()}
-                AND s.captured_at < ${secondWindow.end.toISOString()}
-              )
-            )
-          ORDER BY s.captured_at DESC
-          LIMIT ${limit}
-        `;
-        allRows.push(...chunk);
-      }
-
-      rows = allRows
-        .sort((a, b) => new Date(b.captured_at).getTime() - new Date(a.captured_at).getTime())
-        .slice(0, limit);
+        const rowValues = [
+          assigned.id,
+          shiftRange.startIso,
+          shiftRange.endIso,
+          firstWindow.start.toISOString(),
+          firstWindow.end.toISOString(),
+          hasSecondWindow,
+          secondWindow.start.toISOString(),
+          secondWindow.end.toISOString(),
+        ];
+        values.push(...rowValues);
+        const offset = values.length - rowValues.length;
+        return `($${offset + 1}::uuid, $${offset + 2}::timestamptz, $${offset + 3}::timestamptz, $${offset + 4}::timestamptz, $${offset + 5}::timestamptz, $${offset + 6}::boolean, $${offset + 7}::timestamptz, $${offset + 8}::timestamptz)`;
+      });
+      values.push(beforeIso, limit);
+      const beforeIndex = values.length - 1;
+      const limitIndex = values.length;
+      rows = await queryRows(
+        `WITH assignment_windows(employee_id, shift_start, shift_end, first_start, first_end, has_second, second_start, second_end) AS (
+           VALUES ${valueRows.join(', ')}
+         )
+         SELECT s.id, s.employee_id, ${screenshotUrlExpression} AS file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
+         FROM screenshots s
+         JOIN assignment_windows aw ON aw.employee_id = s.employee_id
+         JOIN public.profiles p ON p.id = s.employee_id
+         WHERE s.captured_at >= aw.shift_start
+           AND s.captured_at < aw.shift_end
+           AND s.captured_at < $${beforeIndex}::timestamptz
+           AND (
+             (s.captured_at >= aw.first_start AND s.captured_at < aw.first_end)
+             OR (aw.has_second AND s.captured_at >= aw.second_start AND s.captured_at < aw.second_end)
+           )
+         ORDER BY s.captured_at DESC
+         LIMIT $${limitIndex}`,
+        values,
+      );
     } else if (canMonitorAll(role)) {
       if (filterUserId) {
-        rows = await sql`
-          SELECT s.id, s.employee_id, s.blob_url AS file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
+        rows = await queryRows(
+          `SELECT s.id, s.employee_id, ${screenshotUrlExpression} AS file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
           FROM screenshots s
           JOIN public.profiles p ON p.id = s.employee_id
-          WHERE s.employee_id = ${filterUserId}
-            AND DATE(s.captured_at) = ${date}
-            AND s.captured_at < ${beforeIso}
+          WHERE s.employee_id = $1
+            AND DATE(s.captured_at) = $2
+            AND s.captured_at < $3
           ORDER BY s.captured_at DESC
-          LIMIT ${limit}
-        `;
+          LIMIT $4`,
+          [filterUserId, date, beforeIso, limit],
+        );
       } else {
-        rows = await sql`
-          SELECT s.id, s.employee_id, s.blob_url AS file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
+        rows = await queryRows(
+          `SELECT s.id, s.employee_id, ${screenshotUrlExpression} AS file_url, s.captured_at, s.created_at, s.active_app, s.activity_pct, p.full_name AS user_name
           FROM screenshots s
           JOIN public.profiles p ON p.id = s.employee_id
-          WHERE DATE(s.captured_at) = ${date}
-            AND s.captured_at < ${beforeIso}
+          WHERE DATE(s.captured_at) = $1
+            AND s.captured_at < $2
           ORDER BY s.captured_at DESC
-          LIMIT ${limit}
-        `;
+          LIMIT $3`,
+          [date, beforeIso, limit],
+        );
       }
     } else {
       return err('Forbidden', 403);
@@ -246,17 +290,30 @@ export async function DELETE(req: NextRequest) {
   if (!id) return err('Missing screenshot id', 400);
 
   try {
-    const rows = await sql`SELECT id, employee_id, blob_url FROM screenshots WHERE id = ${id} LIMIT 1`;
+    const availableColumns = await getExistingColumns('screenshots', ['blob_url', 'file_url']);
+    const screenshotUrlExpression = getScreenshotUrlExpression(availableColumns);
+    const rows = await queryRows(
+      `SELECT id, employee_id, ${screenshotUrlExpression} AS blob_url FROM screenshots WHERE id = $1 LIMIT 1`,
+      [id],
+    );
     const rec = rows?.[0];
     if (!rec) return err('Screenshot not found', 404);
 
     try {
       const blobUrl: string = rec.blob_url || '';
       if (blobUrl) {
-        await del(blobUrl);
+        if (blobUrl.includes('.blob.vercel-storage.com/')) {
+          await del(blobUrl);
+        } else {
+          const objectPath = getSupabaseObjectPath(blobUrl);
+          if (objectPath) {
+          const { error: removeError } = await assertSupabaseAdmin().storage.from('screenshots').remove([objectPath]);
+          if (removeError) throw removeError;
+          }
+        }
       }
     } catch (e:any) {
-      console.warn('Error removing file from Blob storage:', e?.message || e);
+      console.warn('Error removing screenshot from storage:', e?.message || e);
     }
 
     await sql`DELETE FROM screenshots WHERE id = ${id}`;

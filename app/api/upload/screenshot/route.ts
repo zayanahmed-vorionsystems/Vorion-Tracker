@@ -2,7 +2,7 @@
 import { randomUUID } from 'crypto';
 import { put } from '@vercel/blob';
 import { requireAuth, ok, err } from '@/lib/api';
-import { withTransaction } from '@/lib/db';
+import { getExistingColumns, withTransaction } from '@/lib/db';
 import { emitSocketEvent } from '@/lib/socket';
 
 export const runtime = 'nodejs';
@@ -10,7 +10,6 @@ export const runtime = 'nodejs';
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 
 export async function POST(req: NextRequest) {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return err('Server misconfigured: BLOB_READ_WRITE_TOKEN not set', 500);
   if (!process.env.DATABASE_URL) return err('Server misconfigured: DATABASE_URL not set', 500);
 
   const user = requireAuth(req);
@@ -41,21 +40,30 @@ export async function POST(req: NextRequest) {
 
     const sessionId = form.get('sessionId') ? String(form.get('sessionId')) : null;
 
-    const buffer = Buffer.from(await file.arrayBuffer());
     const finalExt = extension || 'png'; // file.type empty case, keep old default
     const blobKey = `screenshots/${employeeId}/${Date.now()}-${randomUUID()}.${finalExt}`;
-    const blob = await put(blobKey, buffer, {
+    const blob = await put(blobKey, file, {
       access: 'public',
       contentType: file.type || 'image/png',
       addRandomSuffix: false,
     });
+    const publicUrl = blob.url;
 
+    const availableColumns = await getExistingColumns('screenshots', ['blob_url', 'file_url', 'device_id']);
     const saved = await withTransaction(async (client) => {
+      const urlColumns = ['blob_url', 'file_url'].filter((column) => availableColumns.has(column));
+      if (!urlColumns.length) throw new Error('screenshots table is missing a URL column');
+
+      const columns = ['employee_id', ...urlColumns, 'captured_at', 'active_app', 'activity_pct', 'session_id'];
+      const values = [employeeId, ...urlColumns.map(() => publicUrl), capturedAt.toISOString(), activeApp, activityPct, sessionId];
+      if (availableColumns.has('device_id')) {
+        columns.splice(1, 0, 'device_id');
+        values.splice(1, 0, deviceId);
+      }
+      const placeholders = values.map((_, index) => `$${index + 1}`).join(', ');
       const inserted = await client.query(
-        `INSERT INTO screenshots (employee_id, device_id, blob_url, captured_at, active_app, activity_pct, session_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id`,
-        [employeeId, deviceId, blob.url, capturedAt.toISOString(), activeApp, activityPct, sessionId],
+        `INSERT INTO screenshots (${columns.join(', ')}) VALUES (${placeholders}) RETURNING id`,
+        values,
       );
       const id = inserted.rows[0].id;
 
@@ -86,13 +94,14 @@ export async function POST(req: NextRequest) {
       userId: employeeId,
       userName: user.name,
       screenshotId: saved.id,
-      blobUrl: blob.url,
+      blobUrl: publicUrl,
+      fileUrl: publicUrl,
       activeApp,
       activityPct,
       capturedAt: capturedAt.toISOString(),
     }, { toAdmins: true });
 
-    return ok({ id: saved.id, blobUrl: blob.url }, 201);
+    return ok({ id: saved.id, blobUrl: publicUrl }, 201);
   } catch (error: any) {
     console.error('POST /api/upload/screenshot error:', error?.message || error);
     return err('Failed to upload screenshot', 500);
