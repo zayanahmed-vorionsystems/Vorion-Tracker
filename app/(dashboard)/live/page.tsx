@@ -313,7 +313,7 @@ export default function LiveMonitorPage() {
           const uploaded = await upload(`live-recordings/${employeeId}/live-${Date.now()}.webm`, blob, {
             access: 'public',
             contentType: 'video/webm',
-            multipart: true,
+            multipart: false,
             handleUploadUrl: '/api/blob/client-upload',
             headers: token ? { Authorization: `Bearer ${token}` } : undefined,
             clientPayload: JSON.stringify({ kind: 'live-recording', employeeId, attempt: 1, firstAttempt: true }),

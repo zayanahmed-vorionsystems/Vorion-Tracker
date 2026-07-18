@@ -291,7 +291,12 @@ let heartbeatInterval:  NodeJS.Timeout|null = null;
 let policyInterval:     NodeJS.Timeout|null = null;
 let scanInterval:       NodeJS.Timeout|null = null;
 let policySyncInterval: NodeJS.Timeout|null = null;
-let captureIntervalSec = parseInt(get('captureIntervalSec')||'5');   // capture cadence: how often a screenshot is taken locally
+const MIN_CAPTURE_INTERVAL_SEC = 60;
+function normalizeCaptureIntervalSec(value: unknown) {
+  const parsed = Number.parseInt(String(value || ''), 10);
+  return Number.isFinite(parsed) ? Math.max(MIN_CAPTURE_INTERVAL_SEC, parsed) : MIN_CAPTURE_INTERVAL_SEC;
+}
+let captureIntervalSec = normalizeCaptureIntervalSec(get('captureIntervalSec')); // capture cadence: how often a screenshot is taken locally
 const uploadIntervalSec = 30;                                        // upload cadence: how often the queue is flushed as one batch API call
 let lastActiveApp    = 'Unknown';
 let lastActivityPct  = 100;

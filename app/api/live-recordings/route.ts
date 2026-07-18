@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
       access: 'public',
       contentType: 'video/webm',
       addRandomSuffix: false,
-      multipart: true,
+      multipart: false,
     });
     console.info('[blob-upload] server-put-complete', {
       route: '/api/live-recordings',

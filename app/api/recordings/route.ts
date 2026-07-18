@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
     access: 'public',
     contentType: 'video/webm',
     addRandomSuffix: false,
-    multipart: true,
+    multipart: false,
   });
   console.info('[blob-upload] server-put-complete', {
     route: '/api/recordings',

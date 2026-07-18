@@ -9,7 +9,7 @@
     "socket-server": "node server/socket-server.js",
     "lint": "next lint",
     "db:migrate": "node scripts/migrate.js",
-    "audit:orphans": "node scripts/repair-orphans.js"
+    "audit:orphans": "node scripts/audit-orphan-screenshot-blobs.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.108.2",
